@@ -5,13 +5,23 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
-### 修复
+## [0.4.0] - 2026-07-27
 
-- **画面锚点整体偏移 1/fps 秒。** ffmpeg 的 `fps` 滤镜首帧在源时间 0，而文件编号从 1 起，所以 `frame_00001.jpg` 是 `t=0`、第 n 帧是 `(n-1)/fps`；此前按 `n/fps` 计算，把 `frame_facts`、场景归属与 storyboard 标签整体推后 1/fps 秒（>5min 视频默认 fps=1，即整整 1 秒）。这些时间戳会写进 VLM prompt 并作为写稿 Agent 的权威画面锚点。换算规则收敛到 `extract.py` 独家定义，帧/VLM 缓存带约定版本号，旧产物强制重算。
-- **带封面图的素材渲染直接失败。** 组装映射 `0:v` 会匹配到 attached_pic 那一路视频流，而 `-vf` 只作用于第一路，ffmpeg 报 `Could not write header` 并留下损坏文件——发生在整条流程的最后一步。改为 `0:v:0`。
-- **`--clip-padding` 非零时相邻片段被误判为重复素材。** 重叠检测此前基于加过 padding 的区间，任意两个背靠背片段都会硬失败；现按 Agent 实际写入的入出点判断。
-- **`CLIP_PADDING` 环境变量此前完全无效。** 六份 CONFIG 都声明了该键并通过 `clip_padding_source` 汇报为生效，但唯一实现 padding 的 video-cut 只读 CLI 参数。
-- 多视频输出时间线的 speech 证据改为与 `audio_mix` / `sentence_boundaries` 一致优先读 `asr_clean.json`；`narration_coverage_max` 等三个只读不声明的 CONFIG 键补齐；`silencedetect` 超时改为与该函数其余失败路径一致地 fail-open；多源剪辑的句子截断阻断项不再挂在无关条件下。
+汇总 `v0.3.3` 之后的全部工作：多源剪辑、QC、字幕与配音改进，可携带剪映草稿能力，内容驱动的创作流程，以及一轮深度审查带来的正确性、性能与配置面修复。
+
+### 新增
+
+- **贴合原片字幕带。** `tools/measure_subtitle.py` 用 stdlib + ffmpeg 抽帧、检测并输出红框预览；`--subtitle-y-top/--subtitle-y-bot` 把新字幕基线与字号适配到测得坐标，并显式启用该区域遮罩。
+- **半透明、解说时段遮罩。** 显式启用原字幕遮罩后，默认改为 `SUBTITLE_MASK_OPACITY=0.6`、`SOURCE_SUBTITLE_MASK_TIMING=narration`，原声留白不再常驻黑条；仍可设为 `1` / `all` 恢复全黑全时段效果。
+- **参考音色解说。** recap / voiceover 新增 `--voice-ref`，通过 `mimo-v2.5-tts-voiceclone` 给普通解说克隆音色；新生成时参考音频惰性转码一次、最长取 30 秒，内容与转码版本指纹参与 TTS 缓存校验。
+- **正式的建议性 MiMo QC。** `--mimo-qc pre-assemble|post-render|both` 在单源/多源流水线的组装前、成片后各最多发起一次 MiMo 请求，把语义/审美观察聚合进 `mimo_qc.json`；内容缓存、`--mimo-qc-refresh`、最多 6 张/768px 临时抽帧、密钥/base64 不落盘均有回归覆盖。缺 key、401/429、超时、畸形响应和本地异常全部 fail-open，只提示 Agent/用户，永远不生成 blocker。
+- **可携带剪映草稿。** video/audio/image 默认打包到 `Resources/local`；timeline v2 新增恒定变速、倒放、transform、富文本/逐字样式、转场/mask/LUT、绿幕复合和离线资源轨道。
+
+### 改进
+
+- **内容驱动的创作流程。** Agent 在剪辑或写稿前先比较剪辑假设，记录 POV、戏剧问题、change-based beats、具体画面/反应、`audio_owner` 与 `narration_job`；`recap_story_plan.json` / `visual_audio_board.json` 同时覆盖单视频与多视频 cut。旁白比例改为素材决定，`7:3` 只保留为粗略回退而非配额。
+- **阶段技能完全自包含。** 阶段说明与本地参考不再引用兄弟技能的路径或名称；写稿阶段拥有独立的补充调研指南与 `deslop_qc.py`，不会假装新调研已被既有 VLM 消费。
+- **多视频证据更可用。** 项目 brief 优先摘取逐来源的背景、索引、ASR 与场景证据，不再只截取通用写作说明。
 
 ### 变更
 
@@ -19,6 +29,20 @@ All notable changes to this project are documented here. This project adheres to
   - `zone_fade_seconds` 在五份副本中均有声明，但**全仓库无任何读取点**，此前仅靠「副本之间取值一致」的断言存活。
   - `CLIP_PADDING` 在 `video-cut` 中依然无效：该技能的 `lib.py` 从未声明此键，查表始终落到内联默认值。
 - **音频策略一致性断言改为按实际声明范围校验。** 此前断言五份副本对约 30 个音频键取值一致，而多数技能并不读取它们——这种一致性是复制行为自身造成的循环要求。新增不变量：**任何技能不得声明自身从不读取的配置**，从结构上杜绝上述两类问题复现。
+
+### 修复
+
+- **画面锚点整体偏移 1/fps 秒。** ffmpeg 的 `fps` 滤镜首帧在源时间 0，而文件编号从 1 起，所以 `frame_00001.jpg` 是 `t=0`、第 n 帧是 `(n-1)/fps`；此前按 `n/fps` 计算，把 `frame_facts`、场景归属与 storyboard 标签整体推后 1/fps 秒（>5min 视频默认 fps=1，即整整 1 秒）。这些时间戳会写进 VLM prompt 并作为写稿 Agent 的权威画面锚点。换算规则收敛到 `extract.py` 独家定义，帧/VLM 缓存带约定版本号，旧产物强制重算。
+- **带封面图的素材渲染直接失败。** 组装映射 `0:v` 会匹配到 attached_pic 那一路视频流，而 `-vf` 只作用于第一路，ffmpeg 报 `Could not write header` 并留下损坏文件——发生在整条流程的最后一步。改为 `0:v:0`。
+- **`--clip-padding` 非零时相邻片段被误判为重复素材。** 重叠检测此前基于加过 padding 的区间，任意两个背靠背片段都会硬失败；现按 Agent 实际写入的入出点判断。
+- **`CLIP_PADDING` 环境变量此前完全无效。** 六份 CONFIG 都声明了该键并通过 `clip_padding_source` 汇报为生效，但唯一实现 padding 的 video-cut 只读 CLI 参数。
+- 多视频输出时间线的 speech 证据改为与 `audio_mix` / `sentence_boundaries` 一致优先读 `asr_clean.json`；`narration_coverage_max` 等三个只读不声明的 CONFIG 键补齐；`silencedetect` 超时改为与该函数其余失败路径一致地 fail-open；多源剪辑的句子截断阻断项不再挂在无关条件下。
+- 亮色画面不再把整片背景误并为字幕候选；测量结果按源隔离，失败时保留上一轮成功产物。
+- 校订版原声字幕使用逐窗口全不透明遮罩，避免与原片硬字幕重影；测量坐标拒绝不兼容的非底部 ASS 对齐。
+- voice reference 使用同一不可变快照完成转码和缓存标识，进程内重复调用不再继承上一次音色；CLI 与环境变量统一提前校验。
+- 长视频的遮罩滤镜超过安全命令长度时改用 ffmpeg filter script，避免 Windows `CreateProcess` 上限；measured band 统一为 `[top, bot)` 并成为视觉 QC 的真实安全区。
+- 测量产物提交失败会回滚整组旧产物；recap 通过显式 assemble 参数传递字幕坐标，不再污染进程环境。
+- 删除测试专用/生产不可达的 assemble、review、audio automation、QC rule-loader 兼容层；MiMo/其他 non-deterministic finding 不再有 allow-list 升级 blocker 的逃生口。每个 skill 的 `lib.py` / `brief.py` / `narration.py` 复制仍刻意保留，确保单独 clone/安装即可运行。
 
 ### 性能
 
@@ -29,44 +53,16 @@ All notable changes to this project are documented here. This project adheres to
 - `pyproject.toml` 显式声明 ruff 规则集。CI 不固定 ruff 版本，而 0.16 起默认规则集被大幅扩展，会让无关 PR 的 lint 步骤失败。
 - `scripts/test.py` 将「未安装 pytest」与真实测试失败区分开。
 
-### 改进
-
-- **内容驱动的创作流程。** Agent 在剪辑或写稿前先比较剪辑假设，记录 POV、戏剧问题、change-based beats、具体画面/反应、`audio_owner` 与 `narration_job`；`recap_story_plan.json` / `visual_audio_board.json` 同时覆盖单视频与多视频 cut。旁白比例改为素材决定，`7:3` 只保留为粗略回退而非配额。
-- **阶段技能完全自包含。** 阶段说明与本地参考不再引用兄弟技能的路径或名称；写稿阶段拥有独立的补充调研指南与 `deslop_qc.py`，不会假装新调研已被既有 VLM 消费。
-- **多视频证据更可用。** 项目 brief 优先摘取逐来源的背景、索引、ASR 与场景证据，不再只截取通用写作说明。
-
 ### 测试
 
 - 测试入口统一到跨平台 `scripts/test.py`；CI 中 frontmatter、manifest、prompt anchor 与隔离导入契约全部改为 pytest 行为/结构测试。
 - 合并重复测试并增加动态 skill 发现、精确重复测试体检测、测试组注册、自包含边界、创作 JSON 结构与 multi-source brief 回归覆盖。
-
-## [0.4.0] - 2026-07-13
-
-汇总 `v0.3.3` 之后的多源剪辑、QC、字幕与配音改进，并扩展可携带剪映草稿能力。
-
-### 新增
-
-- **贴合原片字幕带。** `tools/measure_subtitle.py` 用 stdlib + ffmpeg 抽帧、检测并输出红框预览；`--subtitle-y-top/--subtitle-y-bot` 把新字幕基线与字号适配到测得坐标，并显式启用该区域遮罩。
-- **半透明、解说时段遮罩。** 显式启用原字幕遮罩后，默认改为 `SUBTITLE_MASK_OPACITY=0.6`、`SOURCE_SUBTITLE_MASK_TIMING=narration`，原声留白不再常驻黑条；仍可设为 `1` / `all` 恢复全黑全时段效果。
-- **参考音色解说。** recap / voiceover 新增 `--voice-ref`，通过 `mimo-v2.5-tts-voiceclone` 给普通解说克隆音色；新生成时参考音频惰性转码一次、最长取 30 秒，内容与转码版本指纹参与 TTS 缓存校验。
-- **正式的建议性 MiMo QC。** `--mimo-qc pre-assemble|post-render|both` 在单源/多源流水线的组装前、成片后各最多发起一次 MiMo 请求，把语义/审美观察聚合进 `mimo_qc.json`；内容缓存、`--mimo-qc-refresh`、最多 6 张/768px 临时抽帧、密钥/base64 不落盘均有回归覆盖。缺 key、401/429、超时、畸形响应和本地异常全部 fail-open，只提示 Agent/用户，永远不生成 blocker。
-- **可携带剪映草稿。** video/audio/image 默认打包到 `Resources/local`；timeline v2 新增恒定变速、倒放、transform、富文本/逐字样式、转场/mask/LUT、绿幕复合和离线资源轨道。
-
-### 修复
-
-- 亮色画面不再把整片背景误并为字幕候选；测量结果按源隔离，失败时保留上一轮成功产物。
-- 校订版原声字幕使用逐窗口全不透明遮罩，避免与原片硬字幕重影；测量坐标拒绝不兼容的非底部 ASS 对齐。
-- voice reference 使用同一不可变快照完成转码和缓存标识，进程内重复调用不再继承上一次音色；CLI 与环境变量统一提前校验。
-- 长视频的遮罩滤镜超过安全命令长度时改用 ffmpeg filter script，避免 Windows `CreateProcess` 上限；measured band 统一为 `[top, bot)` 并成为视觉 QC 的真实安全区。
-- 测量产物提交失败会回滚整组旧产物；recap 通过显式 assemble 参数传递字幕坐标，不再污染进程环境。
-- 删除测试专用/生产不可达的 assemble、review、audio automation、QC rule-loader 兼容层；MiMo/其他 non-deterministic finding 不再有 allow-list 升级 blocker 的逃生口。每个 skill 的 `lib.py` / `brief.py` / `narration.py` 复制仍刻意保留，确保单独 clone/安装即可运行。
 
 ### 验证
 
 - 全套 `python3 scripts/test.py` 通过（801 tests）；`ruff`、`compileall`、修改模块 `mypy` clean；其中 assemble 275 tests 覆盖剪映草稿协议、timeline 迁移和便携资源写入。
 - 真实 ffmpeg 合成字幕样片验证：测量工具识别 `y=[613,637)`；遮罩像素在留白帧为 `128`、解说帧为 `51`。
 - 剪映专业版 `10.8.7-beta1` 实测：视频/解说/BGM/字幕/图片轨在线，预览、保存、关闭与重开正常。
-
 
 ## [0.3.3] - 2026-06-28
 
