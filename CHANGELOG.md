@@ -5,6 +5,23 @@ All notable changes to this project are documented here. This project adheres to
 
 ## [Unreleased]
 
+### 修复
+
+- **画面锚点整体偏移 1/fps 秒。** ffmpeg 的 `fps` 滤镜首帧在源时间 0，而文件编号从 1 起，所以 `frame_00001.jpg` 是 `t=0`、第 n 帧是 `(n-1)/fps`；此前按 `n/fps` 计算，把 `frame_facts`、场景归属与 storyboard 标签整体推后 1/fps 秒（>5min 视频默认 fps=1，即整整 1 秒）。这些时间戳会写进 VLM prompt 并作为写稿 Agent 的权威画面锚点。换算规则收敛到 `extract.py` 独家定义，帧/VLM 缓存带约定版本号，旧产物强制重算。
+- **带封面图的素材渲染直接失败。** 组装映射 `0:v` 会匹配到 attached_pic 那一路视频流，而 `-vf` 只作用于第一路，ffmpeg 报 `Could not write header` 并留下损坏文件——发生在整条流程的最后一步。改为 `0:v:0`。
+- **`--clip-padding` 非零时相邻片段被误判为重复素材。** 重叠检测此前基于加过 padding 的区间，任意两个背靠背片段都会硬失败；现按 Agent 实际写入的入出点判断。
+- **`CLIP_PADDING` 环境变量此前完全无效。** 六份 CONFIG 都声明了该键并通过 `clip_padding_source` 汇报为生效，但唯一实现 padding 的 video-cut 只读 CLI 参数。
+- 多视频输出时间线的 speech 证据改为与 `audio_mix` / `sentence_boundaries` 一致优先读 `asr_clean.json`；`narration_coverage_max` 等三个只读不声明的 CONFIG 键补齐；`silencedetect` 超时改为与该函数其余失败路径一致地 fail-open；多源剪辑的句子截断阻断项不再挂在无关条件下。
+
+### 性能
+
+- **不再重复哈希/解码/探测同一批字节。** `file_fingerprint` 按进程记忆化（内容寻址不变，仅用 dev/inode/size/mtime_ns 作记忆键）：一次理解流程原本要对源视频做 8–10 次全量 sha256、对整套抽帧做 2–3 遍，40 分钟视频约 2400 张全分辨率 JPEG。VLM 的逐帧 base64 缓存由无上界字典改为 LRU；续传缓存由每个场景整份重写改为按批落盘；TTS 响度归一从三遍纯 Python 遍历改为 `array('h')` 单遍（输出字节与元数据完全一致）；命中缓存的 TTS 段不再逐段 ffprobe；黑/白帧场景过滤按场景并行。
+
+### 构建
+
+- `pyproject.toml` 显式声明 ruff 规则集。CI 不固定 ruff 版本，而 0.16 起默认规则集被大幅扩展，会让无关 PR 的 lint 步骤失败。
+- `scripts/test.py` 将「未安装 pytest」与真实测试失败区分开。
+
 ### 改进
 
 - **内容驱动的创作流程。** Agent 在剪辑或写稿前先比较剪辑假设，记录 POV、戏剧问题、change-based beats、具体画面/反应、`audio_owner` 与 `narration_job`；`recap_story_plan.json` / `visual_audio_board.json` 同时覆盖单视频与多视频 cut。旁白比例改为素材决定，`7:3` 只保留为粗略回退而非配额。
