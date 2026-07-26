@@ -2,9 +2,16 @@ import base64
 import json
 import mimetypes
 import re
+from collections import OrderedDict
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
+from extract import (
+    FRAME_TIME_CONVENTION_VERSION,
+    frame_time,
+    parse_frame_number,
+)
 from lib import CONFIG
 from lib import log, api_call, load_prompt, mimo_video_api_call, run_cmd, file_fingerprint, stable_hash
 
@@ -114,23 +121,38 @@ def analyze_scenes(scenes, frames, work_dir, *, resume=True):
     if ctx:
         vlm_prompt = f"已知信息：{ctx}\n\n{vlm_prompt}"
 
-    # 构建帧时间映射 (frame_NNNNN.jpg -> time in seconds)
+    # 构建帧时间映射 (frame_NNNNN.jpg -> time in seconds)。换算规则由 extract.py 独家定义：
+    # ffmpeg 首帧在 t=0 而文件编号从 1 起，所以是 (n-1)/fps，不是 n/fps。
     frame_times = {}
     for f in frames:
-        parts = f.stem.split("_")
-        if len(parts) != 2 or not parts[1].isdigit():
+        num = parse_frame_number(f)
+        if num is None:
             continue
-        num = int(parts[1])
-        t = num / fps
-        frame_times[f] = t
+        frame_times[f] = frame_time(num, fps)
 
-    # base64 编码缓存
-    b64_cache = {}
+    # base64 编码缓存（LRU）。原来是无上界的 dict：整个 VLM 阶段会把用到的每一帧的 base64
+    # 都常驻内存，而 base64 比原图还大 1/3。40 分钟视频 fps=1 约 2400 帧 → 数百 MB 常驻。
+    # 相邻场景才会复用同一帧，容量取「并发数 × 单场景最大帧数」就够，再多也命中不了。
+    b64_capacity = max(
+        8,
+        int(CONFIG.get("vlm_max_frames", 16) or 16) * max(1, int(CONFIG.get("vlm_workers", 4) or 4)),
+    )
+    b64_cache = OrderedDict()
+    b64_lock = Lock()
 
     def _get_b64(frame_path):
-        if frame_path not in b64_cache:
-            b64_cache[frame_path] = base64.b64encode(frame_path.read_bytes()).decode()
-        return b64_cache[frame_path]
+        with b64_lock:
+            cached = b64_cache.get(frame_path)
+            if cached is not None:
+                b64_cache.move_to_end(frame_path)
+                return cached
+        encoded = base64.b64encode(frame_path.read_bytes()).decode()
+        with b64_lock:
+            b64_cache[frame_path] = encoded
+            b64_cache.move_to_end(frame_path)
+            while len(b64_cache) > b64_capacity:
+                b64_cache.popitem(last=False)
+        return encoded
 
     def _analyze_single_scene(i, scene):
         """分析单个场景，返回 (scene_id, result_dict)"""
@@ -224,7 +246,7 @@ def analyze_scenes(scenes, frames, work_dir, *, resume=True):
             i, round(float(scene["start"]), 3), round(float(scene["end"]), 3),
             CONFIG.get("vlm_model"), prompt_fp, CONFIG.get("vlm_max_tokens"),
             CONFIG.get("vlm_seconds_per_frame"), CONFIG.get("vlm_max_frames"),
-            round(float(fps), 3),
+            round(float(fps), 3), FRAME_TIME_CONVENTION_VERSION,
             CONFIG.get("api_url"), CONFIG.get("mimo_disable_thinking", True),
             CONFIG.get("mimo_media_resolution"),
         ))
@@ -240,22 +262,38 @@ def analyze_scenes(scenes, frames, work_dir, *, resume=True):
         log(f"VLM 复用 {len(scenes) - len(todo)} 个已缓存场景，待分析 {len(todo)} 个")
 
     def _run_pass(indices, workers):
-        """分析给定场景索引；每完成一个就把结果写入续传缓存（在主线程，无需加锁）。返回 (i, err) 失败列表。"""
+        """分析给定场景索引；结果按批持久化到续传缓存（在主线程，无需加锁）。返回 (i, err) 失败列表。
+
+        续传缓存每次都是整份重写，原来每完成一个场景就刷一次 → 写入量随场景数平方增长
+        （300 个场景约 75MB 冗余写），而且序列化发生在收结果的主循环上。改成按批刷：
+        崩溃最多丢失不到一批的进度，而这些场景本来就会在重跑时被重新分析。
+        """
         if not indices:
             return []
         failures = []
+        pending = 0
+        # 与并发度对齐：一批大致就是「同时在飞的那几个场景」。
+        flush_every = max(1, min(16, workers))
         with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
             futures = {executor.submit(_analyze_single_scene, i, scenes[i]): i for i in indices}
-            for future in as_completed(futures):
-                i = futures[future]
-                try:
-                    idx, result = future.result()
-                    analyses[idx] = result
-                    cache[_scene_cache_key(idx, scenes[idx])] = result
-                    _flush_vlm_scene_cache(work_dir, cache)  # 持久化进度，崩溃/中止后可续传
-                except Exception as e:  # noqa: BLE001 - 单个场景失败不能拖垮其余已完成的
-                    log(f"VLM 场景 {i+1} 分析失败: {e}")
-                    failures.append((i, str(e)))
+            try:
+                for future in as_completed(futures):
+                    i = futures[future]
+                    try:
+                        idx, result = future.result()
+                        analyses[idx] = result
+                        cache[_scene_cache_key(idx, scenes[idx])] = result
+                        pending += 1
+                        if pending >= flush_every:
+                            _flush_vlm_scene_cache(work_dir, cache)
+                            pending = 0
+                    except Exception as e:  # noqa: BLE001 - 单个场景失败不能拖垮其余已完成的
+                        log(f"VLM 场景 {i+1} 分析失败: {e}")
+                        failures.append((i, str(e)))
+            finally:
+                # 无论正常结束、失败还是中断，都把这一轮已完成的场景落盘。
+                if pending:
+                    _flush_vlm_scene_cache(work_dir, cache)
         return failures
 
     base_workers = min(len(todo) or 1, int(CONFIG.get("vlm_workers", 4) or 4))

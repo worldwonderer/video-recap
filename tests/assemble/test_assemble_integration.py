@@ -213,6 +213,43 @@ def test_output_is_yuv420p_and_faststart_on_reencode(tmp_path, monkeypatch):
     assert atoms.index("moov") < atoms.index("mdat"), f"moov not front-loaded: {atoms}"
 
 
+def _make_source_video_with_cover_art(path, tmp_path, seconds=2):
+    """A normal A/V source that also carries an attached_pic (cover art) video stream."""
+    base = tmp_path / "cover_base.mp4"
+    _make_source_video(base, seconds=seconds)
+    cover = tmp_path / "cover.png"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1",
+        "-frames:v", "1", str(cover),
+    ], check=True, capture_output=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(base), "-i", str(cover),
+        "-map", "0", "-map", "1", "-c", "copy",
+        "-disposition:v:1", "attached_pic", str(path),
+    ], check=True, capture_output=True)
+
+
+def test_source_with_attached_cover_art_still_renders(tmp_path, monkeypatch):
+    """A source carrying cover art has TWO video streams. Mapping all of them into a filtered
+    re-encode makes ffmpeg abort ("Could not write header (incorrect codec parameters ?)")
+    and leave an unreadable file, at the very last step of the pipeline. Only the real
+    picture stream may be mapped."""
+    monkeypatch.setitem(CONFIG, "final_loudnorm", False)
+    monkeypatch.setitem(CONFIG, "mask_source_subtitles", False)
+    monkeypatch.setitem(CONFIG, "burn_subtitles", False)
+    monkeypatch.setitem(CONFIG, "force_video_reencode", True)  # forces the -vf/libx264 branch
+    work = tmp_path / "w_cover"
+    work.mkdir()
+    src = tmp_path / "src_cover.mp4"
+    _make_source_video_with_cover_art(src, tmp_path, seconds=2)
+    assert _stream_types(src).count("video") == 2  # precondition: cover art present
+    out = work / "recap_cover.mp4"
+    segs = _segment(work, 0.3, 1.5, overlaps=True, dur=1.0)
+    assemble_video(src, segs, work, out)
+    assert out.exists() and out.stat().st_size > 0
+    assert _stream_types(out) == ["video", "audio"], "cover art must not reach the output"
+
+
 def test_odd_height_422_force_reencode_does_not_abort(tmp_path, monkeypatch):
     """yuv420p needs even dims; an odd-height 4:2:2 source must still produce a valid file
     (the bare force_video_reencode branch). Without the even-normalize, libx264 aborts to 0 bytes."""

@@ -1,3 +1,11 @@
+[tool.ruff.lint]
+# State the ruleset explicitly instead of inheriting ruff's default `select`.
+# CI installs ruff unpinned, and ruff's defaults widen between releases: as of 0.16 the
+# implicit default started pulling in isort/flake8-bugbear/pylint/RUF rules, which turns
+# a green tree red on an unrelated PR. These four are the historical default and the
+# contract this repo is written against; widening it should be a deliberate commit.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.ruff.lint.per-file-ignores]
 # Each skill ships its own lib.py, so tests prepend their skill's scripts dir to
 # sys.path before importing — that legitimately puts imports after a statement (E402).

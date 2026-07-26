@@ -23,6 +23,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from extract import frame_number_for_time, parse_frame_number
 from lib import CONFIG, run_cmd, log
 
 try:  # file_fingerprint is the project's content-fingerprint helper; reuse when cheap.
@@ -87,10 +88,10 @@ def _frame_index(work_dir):
         return [], []
     pairs = []
     for path in frames_dir.glob("frame_*.jpg"):
-        stem_parts = path.stem.split("_")
-        if len(stem_parts) != 2 or not stem_parts[1].isdigit():
+        number = parse_frame_number(path)
+        if number is None:
             continue
-        pairs.append((int(stem_parts[1]), path))
+        pairs.append((number, path))
     pairs.sort(key=lambda item: item[0])
     numbers = [num for num, _ in pairs]
     paths = [path for _, path in pairs]
@@ -100,16 +101,17 @@ def _frame_index(work_dir):
 def _nearest_existing_frame(timestamp, fps, paths, numbers):
     """Map a SOURCE timestamp → the nearest EXISTING frame file, clamped to [first,last].
 
-    Frames are named frame_{n:05d}.jpg with t = n / fps (vlm.py convention). Rounding a
-    timestamp blindly can yield a frame number that was never written (fps boundary / last
-    frame gap), so we resolve to the closest number that actually exists on disk.
+    Frames are named frame_{n:05d}.jpg; the number↔time mapping is owned by extract.py
+    (frame_00001 is t=0, so n = t*fps + 1). Rounding a timestamp blindly can yield a frame
+    number that was never written (fps boundary / last frame gap), so we resolve to the
+    closest number that actually exists on disk.
     """
     if not numbers:
         return None
     fps = float(fps)
     if fps <= 0:
         return None
-    target = float(timestamp) * fps
+    target = frame_number_for_time(timestamp, fps)
     # Clamp into the real extracted range so out-of-range timestamps pin to first/last frame.
     if target <= numbers[0]:
         return paths[0]

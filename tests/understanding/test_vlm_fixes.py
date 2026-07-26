@@ -104,12 +104,13 @@ def test_analyze_scenes_sends_the_editorial_evidence_prompt_to_vlm(monkeypatch, 
 
 def _three_scene_setup(monkeypatch, tmp_path, workers):
     frames = []
-    for n in (1, 2, 3):
+    for n in (1, 2, 3, 4):
         f = tmp_path / f"frame_{n:05d}.jpg"
         f.write_bytes(b"\xff\xd8\xff\xd9")
         frames.append(f)
     scenes = [{"start": 0.5, "end": 1.5}, {"start": 1.5, "end": 2.5}, {"start": 2.5, "end": 3.5}]
-    monkeypatch.setitem(CONFIG, "fps", 1.0)        # frame_0000N -> t = N seconds, one frame per scene
+    # frame_0000N -> t = (N-1)/fps, so frames land at 0/1/2/3s and each scene owns exactly one.
+    monkeypatch.setitem(CONFIG, "fps", 1.0)
     monkeypatch.setitem(CONFIG, "vlm_model", "mimo-v2.5")
     monkeypatch.setitem(CONFIG, "vlm_workers", workers)
     monkeypatch.setitem(CONFIG, "context_info", "")
@@ -247,10 +248,10 @@ def test_retry_text_keeps_frame_timestamp_header(monkeypatch, tmp_path):
         analyze_scenes(scenes, [frame], tmp_path)
 
     assert len(retry_texts) == 3
-    # frame_00001.jpg @ fps=1.0 -> 1.0s ; header must appear on every attempt incl. retries
+    # frame_00001.jpg @ fps=1.0 -> 0.0s ; header must appear on every attempt incl. retries
     for text in retry_texts:
         assert "帧时间点" in text
-        assert "1.0s" in text
+        assert "0.0s" in text
     # retry attempts also carry the explicit format reminder
     assert "请务必按格式输出，不要留空。" in retry_texts[1]
     assert "请务必按格式输出，不要留空。" in retry_texts[2]
