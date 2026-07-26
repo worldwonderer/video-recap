@@ -13,6 +13,13 @@ All notable changes to this project are documented here. This project adheres to
 - **`CLIP_PADDING` 环境变量此前完全无效。** 六份 CONFIG 都声明了该键并通过 `clip_padding_source` 汇报为生效，但唯一实现 padding 的 video-cut 只读 CLI 参数。
 - 多视频输出时间线的 speech 证据改为与 `audio_mix` / `sentence_boundaries` 一致优先读 `asr_clean.json`；`narration_coverage_max` 等三个只读不声明的 CONFIG 键补齐；`silencedetect` 超时改为与该函数其余失败路径一致地 fail-open；多源剪辑的句子截断阻断项不再挂在无关条件下。
 
+### 变更
+
+- **每个配置旋钮只声明在读它的技能里。** 六份 `lib.py` 中有五份此前携带所有技能配置的并集（各 155–173 个键，其中 95–132 个该技能从不读取）；`video-cut` 一直是反例（8 个键，全部使用）。现在各技能只声明自己读取的键，删除 583 条无效声明。保留集由运行时插桩实测得出（按调用栈把 parity 测试的读取与生产代码的读取区分开），而非静态匹配——这也是发现下列两处问题的方式。
+  - `zone_fade_seconds` 在五份副本中均有声明，但**全仓库无任何读取点**，此前仅靠「副本之间取值一致」的断言存活。
+  - `CLIP_PADDING` 在 `video-cut` 中依然无效：该技能的 `lib.py` 从未声明此键，查表始终落到内联默认值。
+- **音频策略一致性断言改为按实际声明范围校验。** 此前断言五份副本对约 30 个音频键取值一致，而多数技能并不读取它们——这种一致性是复制行为自身造成的循环要求。新增不变量：**任何技能不得声明自身从不读取的配置**，从结构上杜绝上述两类问题复现。
+
 ### 性能
 
 - **不再重复哈希/解码/探测同一批字节。** `file_fingerprint` 按进程记忆化（内容寻址不变，仅用 dev/inode/size/mtime_ns 作记忆键）：一次理解流程原本要对源视频做 8–10 次全量 sha256、对整套抽帧做 2–3 遍，40 分钟视频约 2400 张全分辨率 JPEG。VLM 的逐帧 base64 缓存由无上界字典改为 LRU；续传缓存由每个场景整份重写改为按批落盘；TTS 响度归一从三遍纯 Python 遍历改为 `array('h')` 单遍（输出字节与元数据完全一致）；命中缓存的 TTS 段不再逐段 ffprobe；黑/白帧场景过滤按场景并行。
