@@ -86,26 +86,6 @@ def env_float(name, default, *, minimum=None):
 # (MIMO_VIDEO_API_KEY / MIMO_TTS_API_KEY / MIMO_ASR_API_KEY and their *_API_URL forms)
 # are optional and fall back to MIMO_API_KEY / MIMO_API_URL. Token-Plan keys (tp-*) auto-
 # route to the Token-Plan cluster base URL; pay-as-you-go keys use api.xiaomimimo.com.
-_mimo_api_key = os.environ.get("MIMO_API_KEY", "")
-_mimo_video_api_key = os.environ.get("MIMO_VIDEO_API_KEY", "") or _mimo_api_key
-_mimo_tts_api_key = os.environ.get("MIMO_TTS_API_KEY", "") or _mimo_api_key
-_mimo_asr_api_key = os.environ.get("MIMO_ASR_API_KEY", "") or _mimo_api_key
-_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(_mimo_api_key)
-_raw_mimo_video_api_url = (
-    os.environ.get("MIMO_VIDEO_API_URL")
-    or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_video_api_key)
-)
-_raw_mimo_tts_api_url = (
-    os.environ.get("MIMO_TTS_API_URL")
-    or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_tts_api_key)
-)
-_raw_mimo_asr_api_url = (
-    os.environ.get("MIMO_ASR_API_URL")
-    or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_asr_api_key)
-)
 
 # Cross-language source: when the original audio is in a language the narration is NOT in
 # (e.g. a Japanese drama recapped in Chinese), the original speech bleeding under the narration
@@ -116,100 +96,8 @@ _foreign_source_audio = env_bool("FOREIGN_SOURCE_AUDIO", False)
 _foreign_under_narration_volume = 0.05  # original volume under narration when source audio is foreign
 
 CONFIG = {
-    "api_provider": "mimo",
-    "api_provider_source": "default",
-    "api_url": normalize_api_url(_raw_api_url),
-    "api_url_source": "env" if os.environ.get("MIMO_API_URL") else "default",
-    "api_key": _mimo_api_key,
-    "api_key_source": "MIMO_API_KEY",
-    "mimo_api_url": normalize_api_url(_raw_api_url),
-    "mimo_api_url_source": "env" if os.environ.get("MIMO_API_URL") else "default",
-    "mimo_api_key": _mimo_api_key,
-    "mimo_api_key_source": "MIMO_API_KEY",
-    "mimo_video_api_url": normalize_api_url(_raw_mimo_video_api_url),
-    "mimo_video_api_url_source": "env" if (
-        os.environ.get("MIMO_VIDEO_API_URL") or os.environ.get("MIMO_API_URL")
-    ) else "default",
-    "mimo_video_api_key": _mimo_video_api_key,
-    "mimo_video_api_key_source": "MIMO_VIDEO_API_KEY" if os.environ.get("MIMO_VIDEO_API_KEY") else "MIMO_API_KEY",
-    "mimo_tts_api_url": normalize_api_url(_raw_mimo_tts_api_url),
-    "mimo_tts_api_url_source": "env" if (
-        os.environ.get("MIMO_TTS_API_URL") or os.environ.get("MIMO_API_URL")
-    ) else "default",
-    "mimo_tts_api_key": _mimo_tts_api_key,
-    "mimo_tts_api_key_source": "MIMO_TTS_API_KEY" if os.environ.get("MIMO_TTS_API_KEY") else "MIMO_API_KEY",
-    "mimo_asr_api_url": normalize_api_url(_raw_mimo_asr_api_url),
-    "mimo_asr_api_url_source": "env" if (
-        os.environ.get("MIMO_ASR_API_URL") or os.environ.get("MIMO_API_URL")
-    ) else "default",
-    "mimo_asr_api_key": _mimo_asr_api_key,
-    "mimo_asr_api_key_source": "MIMO_ASR_API_KEY" if os.environ.get("MIMO_ASR_API_KEY") else "MIMO_API_KEY",
-    "mimo_model": os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
-    "mimo_model_source": "env" if os.environ.get("MIMO_MODEL") else "default",
-    "mimo_video_model": os.environ.get("MIMO_VIDEO_MODEL") or os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
-    "mimo_video_model_source": "env" if (
-        os.environ.get("MIMO_VIDEO_MODEL") or os.environ.get("MIMO_MODEL")
-    ) else "default",
-    "vlm_model": os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
-    "vlm_model_source": "env" if os.environ.get("MIMO_MODEL") else "default",
-    "mimo_asr_model": os.environ.get("MIMO_ASR_MODEL", DEFAULT_MIMO_ASR_MODEL),
-    "mimo_asr_model_source": "env" if os.environ.get("MIMO_ASR_MODEL") else "default",
-    "mimo_asr_language": os.environ.get("MIMO_ASR_LANGUAGE", "auto"),  # auto | zh | en
-    "mimo_asr_base64_max_mb": env_float("MIMO_ASR_BASE64_MAX_MB", 10.0, minimum=1.0),
-    # ASR 分段窗口秒数。越小 → 长视频的对白时间戳越精细（默认 15s）。旧值 180s 会把 >3min
-    # 视频的对白塌缩成一个时间戳，既让 brief 无法定位对白，又触发 detect.py 的粗粒度跳过，
-    # 使 overlaps_speech/安静窗口判断失真。代价是更多 ASR 调用；ASR 慢时可调大。
-    "asr_segment_seconds": env_float("ASR_SEGMENT_SECONDS", 15.0, minimum=5.0),
-    "scene_threshold": 0.1,
-    "scene_threshold_source": "default",
-    "mimo_tts_model": os.environ.get("MIMO_TTS_MODEL", DEFAULT_MIMO_TTS_MODEL),
-    "mimo_tts_model_source": "env" if os.environ.get("MIMO_TTS_MODEL") else "default",
-    "mimo_tts_voice": os.environ.get("MIMO_TTS_VOICE", "冰糖"),
-    "mimo_tts_voice_source": "env" if os.environ.get("MIMO_TTS_VOICE") else "default",
-    "mimo_tts_style": os.environ.get(
-        "MIMO_TTS_STYLE",
-        "自然、清晰、有感染力，像在给观众讲故事；随剧情起伏，该紧张时紧张、该动情时动情，不平铺直叙。",
-    ),
-    "mimo_tts_style_source": "env" if os.environ.get("MIMO_TTS_STYLE") else "default",
-    "mimo_media_resolution": os.environ.get("MIMO_MEDIA_RESOLUTION", "default"),
-    "mimo_media_resolution_source": "env" if os.environ.get("MIMO_MEDIA_RESOLUTION") else "default",
-    "mimo_video_overview": env_bool("MIMO_VIDEO_OVERVIEW", False),  # opt-in (--mimo-video-overview / =1); when on it becomes the PRIMARY per-scene description, frames stay the anchor/fallback
-    "mimo_video_overview_source": "env" if os.environ.get("MIMO_VIDEO_OVERVIEW") else "default",
-    "mimo_video_fps": env_float("MIMO_VIDEO_FPS", 3.0, minimum=0.1),
-    "mimo_video_fps_source": "env" if os.environ.get("MIMO_VIDEO_FPS") else "default",
-    "mimo_video_chunk_max_seconds": env_float("MIMO_VIDEO_CHUNK_MAX_SECONDS", 20.0, minimum=1.0),
-    "mimo_video_chunk_min_seconds": env_float("MIMO_VIDEO_CHUNK_MIN_SECONDS", 1.0, minimum=0.2),
-    "mimo_video_chunk_timeout": env_int("MIMO_VIDEO_CHUNK_TIMEOUT", 180, minimum=1),
-    "mimo_video_base64_max_mb": env_float("MIMO_VIDEO_BASE64_MAX_MB", 45.0, minimum=1.0),
-    # Per-scene frame VLM sampling — scale frames with scene length instead of a hard cap of 6
-    "vlm_seconds_per_frame": env_float("VLM_SECONDS_PER_FRAME", 4.0, minimum=0.5),
-    "vlm_max_frames": env_int("VLM_MAX_FRAMES", 16, minimum=3),
-    "vlm_max_tokens": env_int("VLM_MAX_TOKENS", 1500, minimum=200),
-    "mimo_video_prompt": os.environ.get(
-        "MIMO_VIDEO_PROMPT",
-        "请用中文分析这个视频分片的主要人物、场景变化、关键动作、情绪走向和剧情冲突，"
-        "重点提取适合写短视频解说的故事线索。不要泛泛复述画面，要标出对后续写稿有用的信息。",
-    ),
-    "mimo_disable_thinking": env_bool("MIMO_DISABLE_THINKING", True),
-    "mimo_disable_thinking_source": "env" if os.environ.get("MIMO_DISABLE_THINKING") else "default",
-    "fps": 0,  # 0 = 自动（≤60s→2fps, ≤5min→1.5fps, >5min→1fps）
-    # TTS 语速（字符/秒）。实测 mimo-tts 冰糖音色中位 ~3.9 字/秒，可用 SPEECH_RATE 覆盖
-    # 生成解说时使用 speech_rate * safety_margin 作为约束
-    "speech_rate": env_float("SPEECH_RATE", 3.9, minimum=0.5),  # 旧值 3.5 系统性偏低 ~10-17%
-    "speech_safety_margin": env_float("SPEECH_SAFETY_MARGIN", 0.85, minimum=0.1),  # 保守系数：TTS 实际语速有 ±20% 波动
-    # Block-coverage lint thresholds — promoted from inline .get() literals to real CONFIG keys (tunable; defaults unchanged)
-    "narration_coverage_target": 0.7,   # rough first-draft/diagnostic fallback; content-led audio decisions may differ (not a quota)
-    "narration_coverage_max": 0.85,     # above this coverage → no_original_blocks (narration is wall-to-wall)
-    "narration_coverage_min": 0.5,      # below this coverage → under_narrated
-    "narration_block_seconds": 9.0,     # block cadence used to derive target block count
-    "original_block_min_seconds": 2.5,  # a deliberate original-audio gap must be at least this long
-    "narration_block_min_chars": 16,    # below this avg block size → fragmented_beats
     "fade_ms": env_int("FADE_MS", 120, minimum=0),  # 每段 TTS 淡入淡出(ms)；过大会让紧凑的句子一顿一顿，120ms 防爆音又不发闷
     "breath_ms": 250,  # 段间呼吸空间(ms)；block recap 块内连贯、块间留原声呼吸
-    # Legacy single-pass cut mapping density fields; current writing uses block coverage controls below.
-    "target_segments_per_minute": 9.6,   # legacy single-pass cut mapping report only; block recap uses narration_coverage_*
-    "min_segments_per_minute": 6.24,     # legacy single-pass cut mapping report only
-    "max_narration_gap_seconds": 11.0,   # legacy single-pass cut mapping report only
     "ducking_mode": "fixed",  # fixed | sidechaincompress | none
     "ducking_threshold": 0.15,
     "ducking_ratio": 3,
@@ -219,10 +107,11 @@ CONFIG = {
     "ducking_makeup": 1.2,
     "ducking_narr_weight": 1.5,
     "ducking_orig_volume": env_float("DUCKING_ORIG_VOLUME", 0.3, minimum=0.0),  # 解说时原声基准音量
-    "foreign_source_audio": _foreign_source_audio,  # 原声语言≠解说语言：解说下原声压到近静音(消除"怪音"双语重叠)
+    # Derived report of the FOREIGN_SOURCE_AUDIO knob this skill implements: it selects the
+    # ducking volumes below. Declared so callers can see which policy is in effect.
+    "foreign_source_audio": _foreign_source_audio,
     "zone_ducking_volume": env_float("ZONE_DUCKING_VOLUME",
         _foreign_under_narration_volume if _foreign_source_audio else 0.12, minimum=0.0),  # 解说时原声压低到的音量
-    "zone_fade_seconds": 0.5,      # 解说/原声切换的淡入淡出时长(秒)
     "idle_orig_volume": env_float("IDLE_ORIG_VOLUME", 1.0, minimum=0.0),  # 解说块之间的"原声块"音量：默认满音量(1.0)，让精彩原声整段放出来，不被压低（用户要求解说成块、原声也成块）
     "duck_fade_seconds": env_float("DUCK_FADE_SECONDS", 0.3, minimum=0.0),  # 解说块/原声块切换的淡入淡出(秒)，略放宽到 0.3 让满音量↔压低的过渡更顺
     "duck_bridge_seconds": env_float("DUCK_BRIDGE_SECONDS", 1.5, minimum=0.0),  # 仅把间隔小于此值的相邻解说窗口并成一段压低；超过则视为作者特意留的"原声块"，原声放回满音量。默认 1.5s：解说块内部连续压低，块与块之间的留白放出满音量原声。该值只控制短间隔合并，不设定旁白/原声配额。调大→更连续铺底、原声块更少；调小→更碎
@@ -256,42 +145,8 @@ CONFIG = {
     "narration_max_pull_seconds": env_float("NARRATION_MAX_PULL_SECONDS", 1.2, minimum=0.0),  # 收紧时一句最多比作者标注提前的秒数（漂移上限，越小越贴画面）
     "narration_tail_pad_seconds": 0.1,  # 解说尾部最少留白；短 slot 会自动压低 delay 避免截断
     "quiet_overlap_min_ratio": 0.8,  # 解说段至少多少比例落在安静窗口内才标记为非对白重叠
-    "visual_beat_max_seconds": 18.0,  # 单段解说超过该时长且跨多个帧锚点时给 lint 提醒
-    "visual_beat_max_facts": 3,  # 单段解说最多建议覆盖的 frame_facts 锚点数量
-    "asr_chunk_min_chars": env_int("ASR_CHUNK_MIN_CHARS", 500, minimum=1),  # brief 中 ASR 写作分块最小字数/词数
-    "asr_chunk_max_chars": env_int("ASR_CHUNK_MAX_CHARS", 800, minimum=1),  # brief 中 ASR 写作分块最大字数/词数
     "speech_ducking_volume": env_float("SPEECH_DUCKING_VOLUME",
         _foreign_under_narration_volume if _foreign_source_audio else 0.2, minimum=0.0),    # 解说与对白重叠时原声音量
-    "silence_noise_threshold": "-25dB",  # ffmpeg silencedetect 噪声阈值
-    "silence_min_duration": 0.3,     # 静音最短持续秒数
-    "quiet_window_min": 1.0,         # 可放解说的安静窗口最短秒数
-    "silence_merge_gap": 0.5,        # 相邻静音段间隔<此值时合并
-    "scene_merge_min": 4.0,         # 场景合并最短时长，<此值的场景合并到相邻场景
-    "scene_junk_filter": env_bool("SCENE_JUNK_FILTER", True),  # 过滤连续黑/白帧无效过渡场景
-    "scene_junk_dark_luma": env_float("SCENE_JUNK_DARK_LUMA", 8.0, minimum=0.0),
-    "scene_junk_bright_luma": env_float("SCENE_JUNK_BRIGHT_LUMA", 245.0, minimum=0.0),
-    "scene_junk_pixel_ratio": env_float("SCENE_JUNK_PIXEL_RATIO", 0.995, minimum=0.0),
-    "context_info": "",              # 额外上下文（节目名、角色名等）
-    "context_info_source": "default",
-    "fps_source": "default",
-    "style": "纪录片",               # 解说风格（resume 时随 run_settings 持久化/恢复）
-    "style_source": "default",
-    "tts_dynamic_params": True,  # 启用动态语速调节
-    "vlm_workers": env_int("VLM_WORKERS", 8, minimum=1),  # VLM 并行分析线程数
-    "tts_workers": env_int("TTS_WORKERS", 4, minimum=1),  # TTS 并行合成线程数
-    "tts_timeout": env_int("TTS_TIMEOUT", 90, minimum=1),  # 单段 TTS 命令超时秒数
-    "tts_retries": env_int("TTS_RETRIES", 3, minimum=1),  # 单段 TTS 失败重试次数
-    "allow_partial_tts": env_bool("ALLOW_PARTIAL_TTS", False),
-    "tts_segment_normalize": env_bool("TTS_SEGMENT_NORMALIZE", True),  # 单段 TTS RMS 归一，降低段间忽大忽小
-    "tts_segment_target_rms_dbfs": env_float("TTS_SEGMENT_TARGET_RMS_DBFS", -20.0),
-    "tts_segment_peak_limit": env_float("TTS_SEGMENT_PEAK_LIMIT", 0.98, minimum=0.1),
-    "edit_mode": os.environ.get("EDIT_MODE", "full"),  # full | cut
-    "edit_mode_source": "env" if os.environ.get("EDIT_MODE") else "default",
-    "target_duration": os.environ.get("TARGET_DURATION", ""),  # cut 模式目标成片时长，如 10m
-    "target_duration_source": "env" if os.environ.get("TARGET_DURATION") else "default",
-    "clip_padding": env_float("CLIP_PADDING", 0.0, minimum=0.0),  # cut 模式片段两端扩展秒数
-    "clip_padding_source": "env" if os.environ.get("CLIP_PADDING") else "default",
-    "allow_clip_overlap": env_bool("ALLOW_CLIP_OVERLAP", False),  # cut 模式是否允许重复/重叠使用原片
     "burn_subtitles": env_bool("BURN_SUBTITLES", True),  # 烧录解说字幕（默认开；遮挡原字幕后需自带字幕，否则字幕区空白）
     "subtitle_original_in_gaps": env_bool("SUBTITLE_ORIGINAL_IN_GAPS", True),  # 原声留白处补烧原声台词字幕（来自 ASR）
     "force_video_reencode": env_bool("FORCE_VIDEO_REENCODE", False),  # 组装时重编码视频，修复部分容器时间戳问题
