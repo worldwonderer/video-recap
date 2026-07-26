@@ -6,6 +6,7 @@ import json
 
 from pathlib import Path
 
+from extract import FRAME_TIME_CONVENTION_VERSION
 from lib import CONFIG, log, file_fingerprint, load_prompt
 
 
@@ -286,7 +287,9 @@ def _frames_manifest_path(work_dir):
 def _frame_cache_payload(video_path, fps, frames):
     frame_names = [Path(frame).name for frame in frames]
     return {
-        "schema_version": 1,
+        # v2: frame number→time is (n-1)/fps, not n/fps. Bumping invalidates frames/VLM
+        # artifacts produced under the old off-by-one so they are recomputed, not reused.
+        "schema_version": FRAME_TIME_CONVENTION_VERSION,
         "source_video_fingerprint": file_fingerprint(video_path),
         "fps": float(fps),
         "frame_count": len(frames),

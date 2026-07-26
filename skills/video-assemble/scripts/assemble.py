@@ -141,7 +141,11 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
             *original_audio_input,
             *bgm_input,
             "-filter_complex_script", str(fc_script),
-            "-map", "0:v", "-map", aout_label,
+            # 0:v:0 (not 0:v): sources with attached cover art carry a second video stream.
+            # -vf only ever applies to the first one, so mapping all of them makes ffmpeg
+            # abort with "Could not write header (incorrect codec parameters ?)" and leave
+            # an unreadable file — after the whole pipeline has already run.
+            "-map", "0:v:0", "-map", aout_label,
         ]
     else:
         cmd = [
@@ -151,7 +155,11 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
             *original_audio_input,
             *bgm_input,
             "-filter_complex", filter_complex,
-            "-map", "0:v", "-map", aout_label,
+            # 0:v:0 (not 0:v): sources with attached cover art carry a second video stream.
+            # -vf only ever applies to the first one, so mapping all of them makes ffmpeg
+            # abort with "Could not write header (incorrect codec parameters ?)" and leave
+            # an unreadable file — after the whole pipeline has already run.
+            "-map", "0:v:0", "-map", aout_label,
         ]
 
     # Video filter chain: mask source subtitles first (drawbox), then burn our subtitles

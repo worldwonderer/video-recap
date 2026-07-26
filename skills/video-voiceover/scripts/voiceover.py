@@ -1,5 +1,6 @@
 import base64
 import json
+import math
 import os
 import re
 import shutil
@@ -12,6 +13,8 @@ from threading import Lock
 from lib import CONFIG
 from lib import log, mimo_tts_api_call, get_video_duration, narration_tempo_budget, run_cmd
 from lib import _truncate_at_sentence, _text_char_count, stable_hash, file_fingerprint
+# Re-exported: tests and callers reach these through voiceover, the module owns the flow.
+from tts_audio import _maybe_normalize_tts_wav, _normalize_tts_wav_rms  # noqa: F401
 
 SUPPORTED_TTS_ENGINES = {"mimo-tts"}
 SEGMENT_AUDIO_SCHEMA_VERSION = 1
@@ -331,91 +334,15 @@ def _cleanup_partial_tts_outputs(output_wav):
             pass
 
 
-def _normalize_tts_wav_rms(input_wav, output_wav, *, target_rms_dbfs=-20.0, peak_limit=0.98):
-    """Normalize a mono/stereo 16-bit WAV to a target RMS with peak guard.
-
-    This helper is intentionally dependency-free so QC/assembly can reuse the
-    returned metadata even when normalization is applied in a later lane.
-    """
-    import math
-    import wave
-
-    input_wav = Path(input_wav)
-    output_wav = Path(output_wav)
-    with wave.open(str(input_wav), "rb") as wf:
-        channels = wf.getnchannels()
-        sampwidth = wf.getsampwidth()
-        framerate = wf.getframerate()
-        frames = wf.getnframes()
-        data = wf.readframes(frames)
-    if sampwidth != 2:
-        raise ValueError(f"仅支持 16-bit PCM WAV: {input_wav}")
-
-    samples = [int.from_bytes(data[i:i + 2], "little", signed=True) for i in range(0, len(data), 2)]
-    if not samples:
-        output_wav.write_bytes(input_wav.read_bytes())
-        return {
-            "rms_dbfs_before": None,
-            "rms_dbfs_after": None,
-            "peak_after": 0.0,
-            "gain_db": 0.0,
-        }
-    rms = math.sqrt(sum(s * s for s in samples) / len(samples))
-    peak = max(abs(s) for s in samples) / 32768.0
-    rms_dbfs_before = 20 * math.log10(max(rms, 1e-9) / 32768.0)
-    target_linear = 10 ** (float(target_rms_dbfs) / 20.0) * 32768.0
-    gain = target_linear / max(rms, 1e-9)
-    if peak > 0:
-        gain = min(gain, float(peak_limit) / peak)
-    normalized = []
-    for sample in samples:
-        value = int(round(sample * gain))
-        value = max(-32768, min(32767, value))
-        normalized.append(value.to_bytes(2, "little", signed=True))
-    out_data = b"".join(normalized)
-    with wave.open(str(output_wav), "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(sampwidth)
-        wf.setframerate(framerate)
-        wf.writeframes(out_data)
-
-    out_samples = [int.from_bytes(out_data[i:i + 2], "little", signed=True) for i in range(0, len(out_data), 2)]
-    out_rms = math.sqrt(sum(s * s for s in out_samples) / len(out_samples))
-    out_peak = max(abs(s) for s in out_samples) / 32768.0
-    return {
-        "rms_dbfs_before": rms_dbfs_before,
-        "rms_dbfs_after": 20 * math.log10(max(out_rms, 1e-9) / 32768.0),
-        "peak_after": out_peak,
-        "gain_db": 20 * math.log10(max(gain, 1e-9)),
-    }
-
-
-def _maybe_normalize_tts_wav(output_wav):
-    """Normalize a synthesized TTS block in-place when possible.
-
-    Unit tests often stub TTS with text bytes rather than real WAV. In that case
-    normalization is skipped safely; real MiMo WAV output gets RMS/peak metadata.
-    """
-    if not CONFIG.get("tts_segment_normalize", True):
-        return None
-    output_wav = Path(output_wav)
-    tmp = output_wav.with_name(f"{output_wav.stem}_norm{output_wav.suffix}")
+def _finite_positive(value):
+    """Return value as a positive float, or None for missing/malformed/non-positive input."""
     try:
-        meta = _normalize_tts_wav_rms(
-            output_wav,
-            tmp,
-            target_rms_dbfs=float(CONFIG.get("tts_segment_target_rms_dbfs", -20.0) or -20.0),
-            peak_limit=float(CONFIG.get("tts_segment_peak_limit", 0.98) or 0.98),
-        )
-        os.replace(tmp, output_wav)
-        return meta
-    except Exception as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        log(f"  TTS RMS 归一跳过: {exc}")
+        number = float(value)
+    except (TypeError, ValueError):
         return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
 
 
 def _tts_segment_cache_path(output_wav):
@@ -439,7 +366,14 @@ def _reuse_tts_segment_cache(index, seg, output_wav, source_text, rate, cache_ke
     cached = _load_tts_segment_cache(output_wav, cache_key)
     if not cached:
         return None
-    existing_dur = _get_audio_duration(output_wav)
+    # The sidecar's audio_fingerprint already proved these exact bytes are what produced
+    # `audio_duration`, so re-probing is a wasted ffprobe process per segment — on a
+    # fully-cached rerun of a 200-block narration that is 200 subprocess spawns for a
+    # number we already hold. Only fall back to ffprobe for pre-existing sidecars written
+    # before the duration was recorded.
+    existing_dur = _finite_positive(cached.get("audio_duration"))
+    if existing_dur is None:
+        existing_dur = _get_audio_duration(output_wav)
     if existing_dur <= 0:
         return None
     spoken_text = str(cached.get("spoken_text") or source_text)

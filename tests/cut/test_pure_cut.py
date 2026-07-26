@@ -312,6 +312,115 @@ def test_normalize_clip_plan_clamps_and_maps_output_timeline():
     assert plan["clips"][1]["output_start"] == 4.0
 
 
+def test_clip_padding_does_not_make_back_to_back_clips_look_duplicated():
+    """Padding widens every clip by the same amount on both ends, so judging overlap on the
+    PADDED ranges turns any ordinary (…,10)(10,…) pair into a hard 'duplicate footage' error.
+    Overlap must be judged on what the agent actually authored."""
+    plan = normalize_clip_plan(
+        [
+            {"start": 0.0, "end": 10.0, "reason": "a"},
+            {"start": 10.0, "end": 20.0, "reason": "b"},
+        ],
+        video_duration=60.0,
+        clip_padding=0.5,
+    )
+
+    assert [(c["source_start"], c["source_end"]) for c in plan["clips"]] == [
+        (0.0, 10.5),
+        (9.5, 20.5),
+    ]
+    # genuinely duplicated footage is still rejected, padding or not
+    with pytest.raises(ValueError, match="overlaps an earlier source range"):
+        normalize_clip_plan(
+            [{"start": 0.0, "end": 10.0}, {"start": 5.0, "end": 15.0}],
+            video_duration=60.0,
+            clip_padding=0.5,
+        )
+
+
+def test_multi_source_clip_padding_only_collides_on_authored_ranges():
+    manifest = {"sources": [{"source_id": "a", "source_path": "a.mp4", "duration": 60.0}]}
+    plan = cut.normalize_multi_source_clip_plan(
+        [
+            {"source_id": "a", "start": 0.0, "end": 10.0},
+            {"source_id": "a", "start": 10.0, "end": 20.0},
+        ],
+        manifest,
+        clip_padding=0.5,
+    )
+
+    assert len(plan["clips"]) == 2
+    with pytest.raises(ValueError, match="source_id a"):
+        cut.normalize_multi_source_clip_plan(
+            [
+                {"source_id": "a", "start": 0.0, "end": 10.0},
+                {"source_id": "a", "start": 5.0, "end": 15.0},
+            ],
+            manifest,
+            clip_padding=0.5,
+        )
+
+
+def _load_lib_with_env(monkeypatch, **env):
+    """Evaluate video-cut's lib.py under a given environment, in its own module namespace.
+
+    Deliberately NOT importlib.reload(lib): this skill's lib has no re-import guard, so a
+    reload rebinds lib.CONFIG to a fresh dict while cut_cli keeps the original — every
+    later test in the process would then be patching a different object than the code
+    reads. A separately-named module instance leaves the live one untouched.
+    """
+    import importlib.util
+
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    path = Path(__file__).resolve().parents[2] / "skills" / "video-cut" / "scripts" / "lib.py"
+    spec = importlib.util.spec_from_file_location("_cut_lib_env_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_clip_padding_env_is_actually_read_into_config(monkeypatch):
+    """The env→CONFIG half of the chain. Monkeypatching CONFIG in the wiring test below
+    would happily pass even if video-cut's lib never declared the key at all — which is
+    exactly how this stayed broken."""
+    import lib
+
+    live_config = lib.CONFIG
+    probed = _load_lib_with_env(monkeypatch, CLIP_PADDING="2.5")
+
+    assert probed.CONFIG["clip_padding"] == 2.5
+    assert lib.CONFIG is live_config, "probing must not rebind the live CONFIG"
+
+
+def test_clip_padding_env_reaches_the_only_skill_that_implements_it(monkeypatch, tmp_path):
+    """The CONFIG→normalizer half. CLIP_PADDING was declared in five skills' CONFIGs and
+    reported as an active knob via clip_padding_source, but video-cut — the only skill that
+    implements padding — read the CLI flag alone."""
+    import cut_cli
+
+    work = tmp_path / "w"
+    work.mkdir()
+    video = tmp_path / "src.mp4"
+    video.write_bytes(b"video")
+    (work / "clip_plan.json").write_text(
+        json.dumps([{"start": 10.0, "end": 20.0, "reason": "x"}]), encoding="utf-8"
+    )
+    monkeypatch.setitem(cut_cli.CONFIG, "clip_padding", 2.0)
+    monkeypatch.setattr("cut_cli.get_video_duration", lambda path: 100.0)
+    monkeypatch.setattr(
+        "cut_cli.build_edited_source_video", lambda *a, **k: Path(a[-1])
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["cut.py", str(video), "--work-dir", str(work), "--no-narration-map"]
+    )
+
+    cut.main()
+
+    clip = json.loads((work / "clip_plan_validated.json").read_text(encoding="utf-8"))["clips"][0]
+    assert (clip["source_start"], clip["source_end"]) == (8.0, 22.0)
+
+
 def test_clip_plan_rejects_overlapping_source_ranges():
     with pytest.raises(ValueError, match="overlaps an earlier source range"):
         normalize_clip_plan(

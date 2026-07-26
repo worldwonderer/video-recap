@@ -75,8 +75,8 @@ def main():
     parser.add_argument(
         "--clip-padding",
         type=float,
-        default=0.0,
-        help="seconds to pad each clip on both ends",
+        default=None,
+        help="seconds to pad each clip on both ends (default: CLIP_PADDING env, else 0)",
     )
     parser.add_argument(
         "--allow-overlap",
@@ -107,6 +107,15 @@ def main():
     )
     args = parser.parse_args()
 
+    # CLIP_PADDING is declared in every skill's CONFIG, but video-cut is the only place that
+    # implements padding — and it used to read the CLI flag alone, so setting the env var did
+    # nothing at all while `clip_padding_source: "env"` reported otherwise. CLI still wins.
+    clip_padding = (
+        args.clip_padding
+        if args.clip_padding is not None
+        else float(CONFIG.get("clip_padding", 0.0) or 0.0)
+    )
+
     work_dir = Path(args.work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     clip_plan_path = (
@@ -127,7 +136,7 @@ def main():
             raw_plan,
             sources_manifest,
             target_duration=target_seconds,
-            clip_padding=args.clip_padding,
+            clip_padding=clip_padding,
             allow_overlap=args.allow_overlap,
         )
         video_duration = None
@@ -137,7 +146,7 @@ def main():
             raw_plan,
             video_duration,
             target_duration=target_seconds,
-            clip_padding=args.clip_padding,
+            clip_padding=clip_padding,
             allow_overlap=args.allow_overlap,
         )
 

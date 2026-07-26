@@ -523,7 +523,11 @@ def _write_multi_source_output_speech_evidence(work_dir, source_records, plan):
         source_dir = _source_work_dir(work_dir, record) if record else None
         anchors = _load_json(source_dir / "speech_boundary_anchors.json") if source_dir else None
         speech = None
-        for name in ("asr_result.json", "asr_clean.json"):
+        # Same precedence as audio_mix._handoff_speech_evidence and
+        # sentence_boundaries._load_source_speech_spans: the cleaned transcript wins.
+        # Reading these in the opposite order made the multi-source output timeline
+        # derive its speech spans from a different artifact than every other consumer.
+        for name in ("asr_clean.json", "asr_result.json"):
             speech = _load_json(source_dir / name) if source_dir else None
             rows = speech.get("segments", []) if isinstance(speech, dict) else speech
             if isinstance(rows, list) and any(

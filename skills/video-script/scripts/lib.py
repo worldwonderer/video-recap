@@ -197,6 +197,7 @@ CONFIG = {
     "speech_safety_margin": env_float("SPEECH_SAFETY_MARGIN", 0.85, minimum=0.1),  # 保守系数：TTS 实际语速有 ±20% 波动
     # Block-coverage lint thresholds — promoted from inline .get() literals to real CONFIG keys (tunable; defaults unchanged)
     "narration_coverage_target": 0.7,   # rough first-draft/diagnostic fallback; content-led audio decisions may differ (not a quota)
+    "narration_coverage_max": 0.85,     # above this coverage → no_original_blocks (narration is wall-to-wall)
     "narration_coverage_min": 0.5,      # below this coverage → under_narrated
     "narration_block_seconds": 9.0,     # block cadence used to derive target block count
     "original_block_min_seconds": 2.5,  # a deliberate original-audio gap must be at least this long
@@ -323,18 +324,39 @@ def stable_hash(value):
     """Return an md5 digest for deterministic JSON-serializable values."""
     return hashlib.md5(stable_json_dumps(value).encode("utf-8")).hexdigest()
 
+_FILE_FINGERPRINT_MEMO = {}
+
+
+def _file_identity(path):
+    """(device, inode, size, mtime_ns) — changes whenever the bytes could have changed."""
+    st = os.stat(os.fspath(path))
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
 def file_fingerprint(path, chunk_size=1024 * 1024):
     """Return a full-content fingerprint for cache-correct identity checks.
 
-    This intentionally avoids mtime/path so copied videos or JSON artifacts can
-    be reused when their bytes are identical, while any byte change invalidates
+    The digest covers CONTENT only — never the path or mtime — so a copied video or
+    artifact is still recognised as the same asset, while any byte change invalidates
     the cache even if timestamps, size, head, or tail bytes are misleading.
+
+    Identity metadata is used ONLY to memoize within a single process. One understanding
+    run fingerprints the same source video 8-10 times and the whole extracted frame set
+    2-3 times; on a 40-minute video at fps=1 that is gigabytes of redundant reads before
+    any real work starts. A file rewritten in place gets a new (size, mtime_ns) and is
+    re-hashed, so the memo can never serve a stale digest.
     """
+    key = _file_identity(path)
+    memoized = _FILE_FINGERPRINT_MEMO.get(key)
+    if memoized is not None:
+        return memoized
     h = hashlib.sha256()
     with open(os.fspath(path), "rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             h.update(chunk)
-    return h.hexdigest()
+    digest = h.hexdigest()
+    _FILE_FINGERPRINT_MEMO[key] = digest
+    return digest
 def _retry_after_seconds(value, fallback):
     """Parse Retry-After seconds or HTTP-date; return fallback on malformed input."""
     if not value:
@@ -439,7 +461,9 @@ def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key
                 time.sleep(wait)
             else:
                 raise RuntimeError(f"API 调用失败 {max_retries} 次: HTTP {e.code} — {body}")
-        except (urllib.error.URLError, Exception) as e:
+        except Exception as e:  # noqa: BLE001 - transport/decode faults are all retryable here
+            # (Deliberately broad, but no longer written as `(URLError, Exception)`, which
+            # read as a tuple while `Exception` already subsumed the first member.)
             wait = min(2 ** attempt, 60)
             safe_error = _sanitize_api_error(e)
             log(f"API 调用失败 (尝试 {attempt+1}/{max_retries}): {safe_error}")
@@ -448,3 +472,6 @@ def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key
                 time.sleep(wait)
             else:
                 raise RuntimeError(f"API 调用失败 {max_retries} 次: {safe_error}")
+    # Unreachable for max_retries >= 1; guards against a silent `None` return (and the
+    # TypeError it would cause at the caller's resp["choices"]) if a caller passes 0.
+    raise ValueError(f"max_retries must be >= 1, got {max_retries}")

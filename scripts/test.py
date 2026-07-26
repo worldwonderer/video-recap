@@ -17,7 +17,28 @@ from pathlib import Path
 GROUPS = ["understanding", "cut", "voiceover", "assemble", "script", "orchestrator", "inspect"]
 
 
+def _require_pytest():
+    """Fail with the actual problem instead of reporting every group as a test failure.
+
+    Without this, a missing pytest prints "No module named pytest" seven times and then
+    "FAILED groups: understanding, cut, ..." — indistinguishable from real failures.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("pytest") is not None:
+        return True
+    print(
+        f"pytest is not installed for this interpreter ({sys.executable}).\n"
+        f"  Install it:  {sys.executable} -m pip install pytest\n"
+        "  Or run the suite with an interpreter that has it (PYTHON=... scripts/test.sh).",
+        file=sys.stderr,
+    )
+    return False
+
+
 def main(argv):
+    if not _require_pytest():
+        return 2
     root = Path(__file__).resolve().parent.parent
     groups = argv or GROUPS
     failed = []

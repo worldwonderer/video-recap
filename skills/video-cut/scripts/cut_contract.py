@@ -3,6 +3,7 @@
 import hashlib
 
 import json
+import os
 
 import re
 
@@ -76,6 +77,18 @@ def parse_duration_seconds(value):
     return seconds
 
 
+def _overlaps_authored_range(ranges, start, end):
+    """Whether [start,end) collides with an already-accepted clip, as AUTHORED.
+
+    Overlap is judged on the agent's own in/out points, never on the padded ones.
+    `clip_padding` deliberately widens every clip by the same amount on both ends, so
+    judging padded ranges makes any two back-to-back clips (…, 10) and (10, …) look like
+    duplicate footage and hard-fails a perfectly ordinary plan. Padding is an output
+    nicety; only what the agent actually asked for defines duplication.
+    """
+    return any(start < other_end and end > other_start for other_start, other_end in ranges)
+
+
 def _clip_value(raw, *names):
     for name in names:
         if name in raw:
@@ -112,13 +125,39 @@ def cut_plan_fingerprint(validated_plan):
     return value_fingerprint(payload)
 
 
+_FILE_FINGERPRINT_MEMO = {}
+
+
+def _file_identity(path):
+    """(device, inode, size, mtime_ns) — changes whenever the bytes could have changed."""
+    st = os.stat(os.fspath(path))
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
 def file_fingerprint(path, chunk_size=1024 * 1024):
-    """Full-content fingerprint for source media cache provenance."""
+    """Return a full-content fingerprint for cache-correct identity checks.
+
+    The digest covers CONTENT only — never the path or mtime — so a copied video or
+    artifact is still recognised as the same asset, while any byte change invalidates
+    the cache even if timestamps, size, head, or tail bytes are misleading.
+
+    Identity metadata is used ONLY to memoize within a single process. One understanding
+    run fingerprints the same source video 8-10 times and the whole extracted frame set
+    2-3 times; on a 40-minute video at fps=1 that is gigabytes of redundant reads before
+    any real work starts. A file rewritten in place gets a new (size, mtime_ns) and is
+    re-hashed, so the memo can never serve a stale digest.
+    """
+    key = _file_identity(path)
+    memoized = _FILE_FINGERPRINT_MEMO.get(key)
+    if memoized is not None:
+        return memoized
     h = hashlib.sha256()
-    with Path(path).open("rb") as f:
+    with open(os.fspath(path), "rb") as f:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             h.update(chunk)
-    return h.hexdigest()
+    digest = h.hexdigest()
+    _FILE_FINGERPRINT_MEMO[key] = digest
+    return digest
 
 
 def _edited_source_meta_path(output_path):
@@ -354,13 +393,12 @@ def normalize_multi_source_clip_plan(
             log(f"  跳过过短 clip #{idx + 1}: {start:.1f}-{end:.1f}s")
             continue
         ranges = source_ranges.setdefault(source_id, [])
-        overlaps = [r for r in ranges if start < r[1] and end > r[0]]
-        if overlaps and not allow_overlap:
+        if not allow_overlap and _overlaps_authored_range(ranges, raw_start, raw_end):
             raise ValueError(
                 f"clip #{idx + 1} overlaps an earlier source range for source_id {source_id}; "
                 "split or remove duplicate source footage before mapping narration"
             )
-        ranges.append((start, end))
+        ranges.append((raw_start, raw_end))
 
         duration = round(end - start, 3)
         clip = {
@@ -465,13 +503,12 @@ def normalize_clip_plan(
         if end - start < min_duration:
             log(f"  跳过过短 clip #{idx + 1}: {start:.1f}-{end:.1f}s")
             continue
-        overlaps = [r for r in source_ranges if start < r[1] and end > r[0]]
-        if overlaps and not allow_overlap:
+        if not allow_overlap and _overlaps_authored_range(source_ranges, raw_start, raw_end):
             raise ValueError(
                 f"clip #{idx + 1} overlaps an earlier source range; "
                 "split or remove duplicate source footage before mapping narration"
             )
-        source_ranges.append((start, end))
+        source_ranges.append((raw_start, raw_end))
 
         duration = round(end - start, 3)
         clip = {

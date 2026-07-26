@@ -736,6 +736,10 @@ def snap_multi_source_clips(
                         "start_unsnapped_reason": event.get("start_unsnapped_reason"),
                     }
                 )
-        if blocking_accum:
-            qc.setdefault("blocking", []).extend(blocking_accum)
+    # Blocking rows are propagated unconditionally. They used to sit inside the
+    # `any(boundary_accum.values())` branch, which happens to hold today only because
+    # enforce_clip_sentence_boundaries always emits sentence_checks — a mid-sentence cut
+    # must never be silently dropped because some sibling QC list came back empty.
+    if blocking_accum:
+        plan.setdefault("qc", {}).setdefault("blocking", []).extend(blocking_accum)
     return plan
