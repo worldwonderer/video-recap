@@ -361,21 +361,36 @@ def test_multi_source_clip_padding_only_collides_on_authored_ranges():
         )
 
 
+def _load_lib_with_env(monkeypatch, **env):
+    """Evaluate video-cut's lib.py under a given environment, in its own module namespace.
+
+    Deliberately NOT importlib.reload(lib): this skill's lib has no re-import guard, so a
+    reload rebinds lib.CONFIG to a fresh dict while cut_cli keeps the original — every
+    later test in the process would then be patching a different object than the code
+    reads. A separately-named module instance leaves the live one untouched.
+    """
+    import importlib.util
+
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    path = Path(__file__).resolve().parents[2] / "skills" / "video-cut" / "scripts" / "lib.py"
+    spec = importlib.util.spec_from_file_location("_cut_lib_env_probe", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_clip_padding_env_is_actually_read_into_config(monkeypatch):
     """The env→CONFIG half of the chain. Monkeypatching CONFIG in the wiring test below
     would happily pass even if video-cut's lib never declared the key at all — which is
     exactly how this stayed broken."""
-    import importlib
-
     import lib
 
-    monkeypatch.setenv("CLIP_PADDING", "2.5")
-    try:
-        reloaded = importlib.reload(lib)
-        assert reloaded.CONFIG["clip_padding"] == 2.5
-    finally:
-        monkeypatch.delenv("CLIP_PADDING", raising=False)
-        importlib.reload(lib)
+    live_config = lib.CONFIG
+    probed = _load_lib_with_env(monkeypatch, CLIP_PADDING="2.5")
+
+    assert probed.CONFIG["clip_padding"] == 2.5
+    assert lib.CONFIG is live_config, "probing must not rebind the live CONFIG"
 
 
 def test_clip_padding_env_reaches_the_only_skill_that_implements_it(monkeypatch, tmp_path):
