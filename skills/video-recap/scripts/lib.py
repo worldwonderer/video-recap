@@ -114,6 +114,25 @@ CONFIG = {
     "api_url_source": "env" if os.environ.get("MIMO_API_URL") else "default",
     "api_key": _mimo_api_key,
     "api_key_source": "MIMO_API_KEY",
+    # Read through a COPY of CONFIG by mimo_qc_evidence._effective_config /
+    # safe_mimo_config, which is why neither a `CONFIG.get(...)` grep nor live-dict
+    # instrumentation sees them. They drive the QC model fallback chain and the
+    # provenance recorded in the QC report.
+    "mimo_qc_model": os.environ.get("MIMO_QC_MODEL") or os.environ.get("MIMO_VIDEO_MODEL")
+    or os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
+    "mimo_qc_model_source": "env" if os.environ.get("MIMO_QC_MODEL") else "fallback",
+    "mimo_model": os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
+    "mimo_model_source": "env" if os.environ.get("MIMO_MODEL") else "default",
+    "mimo_api_url": normalize_api_url(_raw_api_url),
+    "mimo_api_url_source": "env" if os.environ.get("MIMO_API_URL") else "default",
+    "mimo_video_api_url_source": "env" if (
+        os.environ.get("MIMO_VIDEO_API_URL") or os.environ.get("MIMO_API_URL")
+    ) else "default",
+    "mimo_disable_thinking": env_bool("MIMO_DISABLE_THINKING", True),
+    "mimo_disable_thinking_source": "env" if os.environ.get("MIMO_DISABLE_THINKING") else "default",
+    "mimo_media_resolution": os.environ.get("MIMO_MEDIA_RESOLUTION", "default"),
+    "mimo_media_resolution_source": "env" if os.environ.get("MIMO_MEDIA_RESOLUTION") else "default",
+    "mimo_api_key": _mimo_api_key,
     "mimo_video_api_url": normalize_api_url(_raw_mimo_video_api_url),
     "mimo_video_api_key": _mimo_video_api_key,
     "mimo_tts_api_url": normalize_api_url(_raw_mimo_tts_api_url),
