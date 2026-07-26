@@ -4,9 +4,6 @@ This module is intentionally report-only. It flags local readability and
 packaging hygiene risks for video narration; it is not an AIGC detector and it
 never rewrites text.
 """
-# GENERATED FILE — do not edit here.
-# Source: shared/deslop_qc.py. Edit that, then run: python scripts/sync_shared.py
-# Copied rather than imported because skills must stay self-contained.
 
 from __future__ import annotations
 

@@ -1,4 +1,7 @@
 """Build the agent narration brief from validated local evidence."""
+# GENERATED FILE — do not edit here.
+# Source: shared/agent_brief.py. Edit that, then run: python scripts/sync_shared.py
+# Copied rather than imported because skills must stay self-contained.
 
 import importlib.util
 

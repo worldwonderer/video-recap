@@ -1,7 +1,4 @@
 """Enforce narration timing, evidence, budget, and sentence-integrity rules."""
-# GENERATED FILE — do not edit here.
-# Source: shared/narration_lint.py. Edit that, then run: python scripts/sync_shared.py
-# Copied rather than imported because skills must stay self-contained.
 
 import importlib.util
 import json

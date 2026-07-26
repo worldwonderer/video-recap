@@ -1,7 +1,4 @@
 """Remap cut evidence and format output-timeline brief directives."""
-# GENERATED FILE — do not edit here.
-# Source: shared/brief_timeline.py. Edit that, then run: python scripts/sync_shared.py
-# Copied rather than imported because skills must stay self-contained.
 
 import importlib.util
 

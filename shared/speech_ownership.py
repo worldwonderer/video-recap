@@ -1,7 +1,4 @@
 """Load measured source-speech evidence and classify narration ownership."""
-# GENERATED FILE — do not edit here.
-# Source: shared/speech_ownership.py. Edit that, then run: python scripts/sync_shared.py
-# Copied rather than imported because skills must stay self-contained.
 
 import json
 import math

@@ -1,4 +1,7 @@
 """Normalize, split, budget, and de-duplicate narration text."""
+# GENERATED FILE — do not edit here.
+# Source: shared/agent_text.py. Edit that, then run: python scripts/sync_shared.py
+# Copied rather than imported because skills must stay self-contained.
 
 import importlib.util
 

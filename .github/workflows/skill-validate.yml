@@ -19,6 +19,10 @@ jobs:
       - name: Install deps
         run: python -m pip install ruff pytest
       - name: Lint (all skills + tests)
-        run: ruff check skills tests scripts
+        run: ruff check shared skills tests scripts
+      - name: Shared sources are distributed into every skill
+        # Also covered by pytest, but as its own step the failure names the actual fix
+        # instead of surfacing as one assertion among hundreds.
+        run: python scripts/sync_shared.py --check
       - name: Tests and packaging contracts (one isolated process per skill)
         run: python scripts/test.py

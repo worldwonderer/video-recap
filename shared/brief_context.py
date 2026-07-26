@@ -1,7 +1,4 @@
 """Load and format research, consolidation, and substrate context."""
-# GENERATED FILE — do not edit here.
-# Source: shared/brief_context.py. Edit that, then run: python scripts/sync_shared.py
-# Copied rather than imported because skills must stay self-contained.
 
 import hashlib
 

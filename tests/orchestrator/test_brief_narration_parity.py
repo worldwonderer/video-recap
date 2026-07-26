@@ -1,59 +1,68 @@
-"""Anti-drift guards for files intentionally copied into self-contained skills."""
+"""Anti-drift guards for files copied into self-contained skills.
 
+Skills may only import their own modules, so genuinely common code is copied rather than
+shared at runtime. These copies used to be held identical to EACH OTHER, which meant every
+edit had to be made twice by hand and no copy was authoritative. They are now generated
+from shared/ by scripts/sync_shared.py, and this asserts the tree is in sync.
+"""
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-BRIEF = ROOT / "skills" / "video-understanding" / "scripts" / "brief.py"
-NARRATION = ROOT / "skills" / "video-script" / "scripts" / "narration.py"
-UNDERSTANDING_SCRIPTS = BRIEF.parent
-SCRIPT_SCRIPTS = NARRATION.parent
-UNDERSTANDING_DESLOP = (
-    ROOT / "skills" / "video-understanding" / "scripts" / "deslop_qc.py"
-)
-SCRIPT_DESLOP = ROOT / "skills" / "video-script" / "scripts" / "deslop_qc.py"
-RECAP_CREATIVE_PLAYBOOK = (
-    ROOT / "skills" / "video-recap" / "references" / "creative-editing-playbook.md"
-)
-SCRIPT_CREATIVE_PLAYBOOK = (
-    ROOT / "skills" / "video-script" / "references" / "creative-editing-playbook.md"
-)
+sys.path.insert(0, str(ROOT / "scripts"))
 
-SYNC_PAIRS = (
-    pytest.param(BRIEF, NARRATION, id="agent-brief-entry"),
-    *[
-        pytest.param(
-            UNDERSTANDING_SCRIPTS / name,
-            SCRIPT_SCRIPTS / name,
-            id=f"agent-brief-{Path(name).stem}",
-        )
-        for name in (
-            "agent_brief.py",
-            "agent_text.py",
-            "brief_context.py",
-            "brief_inputs.py",
-            "brief_timeline.py",
-            "narration_lint.py",
-            "speech_ownership.py",
-            "timeline_fusion.py",
-        )
+import sync_shared  # noqa: E402
+
+UNDERSTANDING_SCRIPTS = ROOT / "skills" / "video-understanding" / "scripts"
+SCRIPT_SCRIPTS = ROOT / "skills" / "video-script" / "scripts"
+
+
+def test_shared_sources_and_targets_all_exist():
+    for source_name, targets in sync_shared.TARGETS.items():
+        assert (sync_shared.SHARED / source_name).is_file(), f"missing shared/{source_name}"
+        assert targets, f"shared/{source_name} is distributed nowhere"
+        for target in targets:
+            assert (ROOT / target).is_file(), f"missing generated copy {target}"
+
+
+@pytest.mark.parametrize(
+    ("source_name", "target"),
+    [
+        pytest.param(source_name, target, id=f"{source_name}->{Path(target).parts[1]}")
+        for source_name, targets in sorted(sync_shared.TARGETS.items())
+        for target in targets
     ],
-    pytest.param(UNDERSTANDING_DESLOP, SCRIPT_DESLOP, id="deslop-qc"),
-    pytest.param(
-        RECAP_CREATIVE_PLAYBOOK, SCRIPT_CREATIVE_PLAYBOOK, id="creative-playbook"
-    ),
 )
-
-
-@pytest.mark.parametrize(("first", "second"), SYNC_PAIRS)
-def test_intentional_local_copies_stay_byte_identical(first, second):
-    assert first.is_file() and second.is_file()
-    assert first.read_bytes() == second.read_bytes(), (
-        f"Self-contained copies drifted: {first} != {second}. "
-        "Apply the same change to both local copies; do not replace them with a cross-skill path."
+def test_generated_copies_match_their_shared_source(source_name, target):
+    expected = sync_shared.rendered(source_name)
+    actual = (ROOT / target).read_text(encoding="utf-8")
+    assert actual == expected, (
+        f"{target} drifted from shared/{source_name}. "
+        "Edit shared/ and run: python scripts/sync_shared.py"
     )
+
+
+def test_sync_check_mode_passes_on_a_clean_tree():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "sync_shared.py"), "--check"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_generated_copies_carry_the_do_not_edit_banner():
+    """The banner is what stops someone editing a copy and losing the change on next sync."""
+    for source_name, targets in sync_shared.TARGETS.items():
+        for target in targets:
+            head = (ROOT / target).read_text(encoding="utf-8")[:600]
+            assert "GENERATED FILE" in head, f"{target} has no generated-file banner"
+            assert f"shared/{source_name}" in head, f"{target} does not name its source"
 
 
 def _top_level_literal(path, name):
@@ -68,6 +77,7 @@ def _top_level_literal(path, name):
 
 
 def test_asr_span_tol_matches_across_files():
+    """consolidate.py is NOT a generated copy, so this constant is still checked by hand."""
     paths = {
         ROOT / "skills/video-understanding/scripts/consolidate.py",
         UNDERSTANDING_SCRIPTS / "brief_inputs.py",

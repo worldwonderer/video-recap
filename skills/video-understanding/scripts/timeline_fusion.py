@@ -1,4 +1,7 @@
 """Fuse scenes, ASR, and quiet windows for narration planning."""
+# GENERATED FILE — do not edit here.
+# Source: shared/timeline_fusion.py. Edit that, then run: python scripts/sync_shared.py
+# Copied rather than imported because skills must stay self-contained.
 
 import importlib.util
 

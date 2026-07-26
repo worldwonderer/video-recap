@@ -1,5 +1,3 @@
-<!-- GENERATED FILE — do not edit here. Source: shared/creative-editing-playbook.md.
-     Edit that, then run: python scripts/sync_shared.py -->
 # 创作剪辑工作法
 
 本参考只规定 Agent 的创作判断，不增加渲染模块。进入剪辑或写稿前，先完成这里的决策，再写 `clip_plan.json` 或 `narration.json`。

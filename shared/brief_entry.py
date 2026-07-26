@@ -1,7 +1,4 @@
 """Public narration-brief API for this self-contained skill."""
-# GENERATED FILE — do not edit here.
-# Source: shared/brief_entry.py. Edit that, then run: python scripts/sync_shared.py
-# Copied rather than imported because skills must stay self-contained.
 
 from agent_brief import build_agent_brief
 from brief_context import assess_understanding_substrate
