@@ -361,10 +361,27 @@ def test_multi_source_clip_padding_only_collides_on_authored_ranges():
         )
 
 
+def test_clip_padding_env_is_actually_read_into_config(monkeypatch):
+    """The env→CONFIG half of the chain. Monkeypatching CONFIG in the wiring test below
+    would happily pass even if video-cut's lib never declared the key at all — which is
+    exactly how this stayed broken."""
+    import importlib
+
+    import lib
+
+    monkeypatch.setenv("CLIP_PADDING", "2.5")
+    try:
+        reloaded = importlib.reload(lib)
+        assert reloaded.CONFIG["clip_padding"] == 2.5
+    finally:
+        monkeypatch.delenv("CLIP_PADDING", raising=False)
+        importlib.reload(lib)
+
+
 def test_clip_padding_env_reaches_the_only_skill_that_implements_it(monkeypatch, tmp_path):
-    """CLIP_PADDING is declared in every skill's CONFIG and reported as an active knob via
-    clip_padding_source, but video-cut used to read the CLI flag alone — so setting the env
-    var silently did nothing."""
+    """The CONFIG→normalizer half. CLIP_PADDING was declared in five skills' CONFIGs and
+    reported as an active knob via clip_padding_source, but video-cut — the only skill that
+    implements padding — read the CLI flag alone."""
     import cut_cli
 
     work = tmp_path / "w"
