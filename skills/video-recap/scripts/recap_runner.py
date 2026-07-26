@@ -119,6 +119,19 @@ def _run_or_restore_understanding(source_record, source_work_dir, args):
     return restored
 
 
+def _single_source_record(video, args):
+    """Identity + settings for the one source of a single-video run."""
+    fp = _file_fingerprint(video)
+    return {
+        "source_id": material_lib.source_id_from_fingerprint(fp),
+        "source_path": str(video),
+        "source_name": video.name,
+        "source_video_fingerprint": fp,
+        "settings_fingerprint": _material_settings_fingerprint(args),
+        "material_id": material_lib.material_id_for(video, fp),
+    }
+
+
 def _rebuild_understanding_brief(source_record, source_work_dir, args):
     """Rebuild agent_narration_brief.md from cached/restored analysis only.
 
@@ -166,6 +179,7 @@ def _run_multi_cut(videos, work_dir, args):
             _run_or_restore_understanding(
                 record, _source_work_dir(work_dir, record), args
             )
+        # Rewrite: _run_or_restore_understanding fills in material_id per record.
         manifest_path = _write_multi_source_manifest(work_dir, source_records)
         _write_project_run_manifest(work_dir, videos, args, source_records)
         _write_multi_source_clip_brief(work_dir, source_records, args)
@@ -395,52 +409,23 @@ def main():
     edited_source = work_dir / "edited_source.mp4"
 
     def _understand():
-        fp = _file_fingerprint(video)
-        source_record = {
-            "source_id": material_lib.source_id_from_fingerprint(fp),
-            "source_path": str(video),
-            "source_name": video.name,
-            "source_video_fingerprint": fp,
-            "settings_fingerprint": _material_settings_fingerprint(args),
-            "material_id": material_lib.material_id_for(video, fp),
-        }
+        source_record = _single_source_record(video, args)
         _run_or_restore_understanding(source_record, work_dir, args)
         return source_record
 
     def _rebuild_output_brief():
-        fp = _file_fingerprint(video)
-        source_record = {
-            "source_id": material_lib.source_id_from_fingerprint(fp),
-            "source_path": str(video),
-            "source_name": video.name,
-            "source_video_fingerprint": fp,
-            "settings_fingerprint": _material_settings_fingerprint(args),
-            "material_id": material_lib.material_id_for(video, fp),
-        }
-        _rebuild_understanding_brief(source_record, work_dir, args)
+        _rebuild_understanding_brief(_single_source_record(video, args), work_dir, args)
 
     inspect_py = _entry("video-recap", "recap_inspect.py")
 
     def _pause(need_text, inspect_hint=None):
-        brief = work_dir / "agent_narration_brief.md"
-        cont = _continuation_command(video, work_dir, args)
-        print("=" * 50)
-        # The brief fires a research directive only when the substrate is thin/empty and no
-        # background_research.json exists yet; amplify it so the agent researches BEFORE writing.
-        if brief.exists() and "Research the story FIRST" in brief.read_text(
-            encoding="utf-8"
-        ):
-            print(
-                "[video-recap] ⚑ 理解素材偏薄：先按 brief 顶部「Research the story FIRST」调研并写 "
-                "background_research.json，再写解说，避免看图说话。"
-            )
-        print(
-            f"[video-recap] ⏸  阅读 {brief}（按 video-script 规则）后写入 {need_text}"
+        # Same banner as the multi-source flow; only the continuation command differs.
+        _pause_for_agent(
+            work_dir,
+            need_text,
+            _continuation_command(video, work_dir, args),
+            inspect_hint=inspect_hint,
         )
-        if inspect_hint:
-            print(f"[video-recap]    先核对状态/时间轴（建议性）: {inspect_hint}")
-        print(f"[video-recap]    写完后重跑继续: {cont}")
-        print("=" * 50)
 
     def _reject_stale_manifest():
         mismatches = _manifest_mismatches(work_dir, video, args)

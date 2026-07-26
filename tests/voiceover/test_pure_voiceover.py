@@ -168,6 +168,61 @@ def test_synthesize_tts_reuses_complete_cache_without_mimo_key(monkeypatch, tmp_
     assert segments[0]["narration"] == "离线复用。"
 
 
+def test_cached_reuse_does_not_reprobe_duration_with_ffprobe(monkeypatch, tmp_path):
+    """The sidecar's audio_fingerprint already proves these bytes produced audio_duration,
+    so a fully-cached rerun should not spawn one ffprobe per narration block."""
+    narration = [
+        {"start": float(i) * 2, "end": float(i) * 2 + 2, "narration": f"第{i}块。"}
+        for i in range(5)
+    ]
+    tts_dir = tmp_path / "tts_segments"
+    tts_dir.mkdir()
+    monkeypatch.setitem(CONFIG, "mimo_tts_api_key", "")
+    monkeypatch.setitem(CONFIG, "tts_dynamic_params", False)
+
+    for i, seg in enumerate(narration):
+        wav = tts_dir / f"narr_{i:03d}.wav"
+        wav.write_bytes(f"cached-{i}".encode())
+        text, _out, rate, _pitch, cache_key = voiceover._prepare_tts_segment(
+            i, seg, narration, tts_dir, "mimo-tts"
+        )
+        voiceover._write_tts_segment_cache(wav, cache_key, text, 1.25, _parse_rate_offset(rate))
+
+    probes = []
+    monkeypatch.setattr(
+        "voiceover._get_audio_duration", lambda path: probes.append(path) or 1.25
+    )
+
+    segments, _engine = synthesize_tts(narration, tmp_path)
+
+    assert [s["audio_duration"] for s in segments] == [1.25] * 5
+    assert probes == [], f"cached reuse still probed {len(probes)} times"
+
+
+def test_cached_reuse_falls_back_to_probe_for_legacy_sidecars(monkeypatch, tmp_path):
+    """Sidecars written before audio_duration was recorded must still be reusable."""
+    narration = [{"start": 0.0, "end": 2.0, "narration": "旧缓存。"}]
+    tts_dir = tmp_path / "tts_segments"
+    tts_dir.mkdir()
+    monkeypatch.setitem(CONFIG, "mimo_tts_api_key", "")
+    monkeypatch.setitem(CONFIG, "tts_dynamic_params", False)
+    wav = tts_dir / "narr_000.wav"
+    wav.write_bytes(b"legacy")
+    text, _out, rate, _pitch, cache_key = voiceover._prepare_tts_segment(
+        0, narration[0], narration, tts_dir, "mimo-tts"
+    )
+    voiceover._write_tts_segment_cache(wav, cache_key, text, 1.25, _parse_rate_offset(rate))
+    sidecar = voiceover._tts_segment_cache_path(wav)
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    del payload["audio_duration"]
+    sidecar.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr("voiceover._get_audio_duration", lambda path: 1.75)
+    segments, _engine = synthesize_tts(narration, tmp_path)
+
+    assert segments[0]["audio_duration"] == 1.75
+
+
 def test_synthesize_tts_voiceclone_cache_does_not_transcode_reference(monkeypatch, tmp_path):
     narration = [{"start": 0.0, "end": 2.0, "narration": "克隆缓存复用。"}]
     ref = tmp_path / "voice.wav"
