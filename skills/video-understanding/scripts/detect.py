@@ -2,6 +2,7 @@ import json
 import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from lib import CONFIG
@@ -68,11 +69,13 @@ def _merge_short_scenes(scenes, min_duration=4.0):
     merged = [scenes[0]]
     for s in scenes[1:]:
         prev = merged[-1]
-        # 如果前一个场景太短，合并到当前
-        if prev["end"] - prev["start"] < min_duration:
-            merged[-1] = {"start": prev["start"], "end": s["end"]}
-        # 如果当前场景太短，合并到前一个
-        elif s["end"] - s["start"] < min_duration:
+        # 任一侧过短就把两段并成一段 [prev.start, s.end]。（原来写成 if/elif 两个分支，
+        # 但两个分支体完全一样，读起来像是有两种不同处理，实际没有区别。）
+        too_short = (
+            prev["end"] - prev["start"] < min_duration
+            or s["end"] - s["start"] < min_duration
+        )
+        if too_short:
             merged[-1] = {"start": prev["start"], "end": s["end"]}
         else:
             merged.append(s)
@@ -132,23 +135,35 @@ def _is_junk_scene(video_path, timestamp, threshold_dark=None, threshold_bright=
     )
 
 
+def _scene_is_junk(scene, video_path):
+    """Whether every probe point of one scene is a black/white transition frame."""
+    start = float(scene["start"])
+    end = float(scene["end"])
+    # 多点采样：起始、中点、结尾各探一帧；只有全部为垃圾帧才删除，
+    # 含任意非垃圾帧的场景必须保留（避免短黑场并入长真实场景后被整段误删）
+    probe_times = [
+        min(end, start + 0.1),
+        (start + end) / 2.0,
+        max(start, end - 0.1),
+    ]
+    # `all` 的短路很重要：绝大多数场景第一探就否掉，只花一次 ffmpeg。
+    return all(_is_junk_scene(video_path, t) for t in probe_times)
+
+
 def _filter_junk_scenes(scenes, video_path):
     """Filter black/white transition scenes while never deleting the whole video."""
     if len(scenes) <= 1:
         return scenes
+    # 每个探点都是一次 ffmpeg 进程（seek + 解一帧），一部 30 分钟片有几百个场景，串行下来
+    # 光进程启动就要几十秒。按场景并行：每个 worker 内部仍然短路，所以既保留了「多数场景只
+    # 探一次」，又把进程启动开销摊平。判定逻辑与探点完全不变。
+    workers = max(1, int(CONFIG.get("scene_junk_workers", 8) or 8))
+    with ThreadPoolExecutor(max_workers=min(workers, len(scenes))) as executor:
+        verdicts = list(executor.map(lambda s: _scene_is_junk(s, video_path), scenes))
     filtered = []
     removed = []
-    for scene in scenes:
-        start = float(scene["start"])
-        end = float(scene["end"])
-        # 多点采样：起始、中点、结尾各探一帧；只有全部为垃圾帧才删除，
-        # 含任意非垃圾帧的场景必须保留（避免短黑场并入长真实场景后被整段误删）
-        probe_times = [
-            min(end, start + 0.1),
-            (start + end) / 2.0,
-            max(start, end - 0.1),
-        ]
-        if all(_is_junk_scene(video_path, t) for t in probe_times):
+    for scene, is_junk in zip(scenes, verdicts):
+        if is_junk:
             removed.append(scene)
         else:
             filtered.append(scene)
@@ -162,6 +177,18 @@ def _filter_junk_scenes(scenes, video_path):
 
 
 # ── Step 3.5: 静音检测 ─────────────────────────────────────────────
+
+# The silence-detection audio is always extracted below as 16 kHz mono signed-16 PCM.
+_SILENCE_AUDIO_BYTES_PER_SECOND = 16000 * 1 * 2
+
+
+def _wav_seconds_estimate(audio_path):
+    """Approximate duration from file size — no ffprobe subprocess on this path."""
+    try:
+        return max(0.0, Path(audio_path).stat().st_size / _SILENCE_AUDIO_BYTES_PER_SECOND)
+    except OSError:
+        return 0.0
+
 
 def _compact_ffmpeg_error(stderr, limit=400):
     """Keep the actionable tail without dumping ffmpeg build/configuration banners."""
@@ -273,7 +300,17 @@ def detect_silence_periods(video_path, work_dir, asr_result=None):
     cmd = ["ffmpeg", "-i", str(audio_path),
            "-af", f"silencedetect=noise={noise}:d={min_dur}",
            "-f", "null", "-"]
-    result = run_cmd(cmd, timeout=120)
+    # Everything else in this function degrades to `return []` (narration then falls back to
+    # non-quiet placement). A timeout must degrade the same way instead of raising
+    # TimeoutExpired through the whole understanding stage. Scale the budget with the audio
+    # so a long feature is not cut off by a constant tuned for short clips — estimated from
+    # the file size (this is the 16 kHz mono s16 WAV we just wrote), not from another probe.
+    timeout = max(120.0, _wav_seconds_estimate(audio_path) * 0.5)
+    try:
+        result = run_cmd(cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        log(f"静音检测超时（>{timeout:.0f}s），跳过安静窗口检测")
+        return []
     if result.returncode != 0:
         log(f"静音检测失败: {_compact_ffmpeg_error(result.stderr)}")
         return []
