@@ -84,20 +84,20 @@ The default Fish model is `s2.1-pro-free`, with the built-in “娱乐扒妹” 
 Run inside Claude Code:
 
 ```text
-/plugin marketplace add worldwonderer/video-recap-skills
+/plugin marketplace add zenstory-ai/video-recap-skills
 /plugin install video-recap-skills@video-recap
 ```
 
 Or simply ask:
 
 ```text
-Install this plugin: https://github.com/worldwonderer/video-recap-skills
+Install this plugin: https://github.com/zenstory-ai/video-recap-skills
 ```
 
 #### Codex CLI
 
 ```bash
-codex plugin marketplace add worldwonderer/video-recap-skills
+codex plugin marketplace add zenstory-ai/video-recap-skills
 codex plugin add video-recap-skills@video-recap
 ```
 
@@ -108,7 +108,7 @@ For a local checkout, replace the marketplace source in the first command with i
 The official [OpenCode Agent Skills documentation](https://opencode.ai/docs/skills/) defines project skills under `.opencode/skills/<name>/SKILL.md`. Clone the repository and start OpenCode from that directory:
 
 ```bash
-git clone https://github.com/worldwonderer/video-recap-skills.git
+git clone https://github.com/zenstory-ai/video-recap-skills.git
 cd video-recap-skills
 mkdir -p .opencode
 ln -s ../skills .opencode/skills             # macOS / Linux
