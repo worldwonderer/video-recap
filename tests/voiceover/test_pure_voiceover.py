@@ -359,7 +359,7 @@ def test_cleanup_partial_outputs_only_replaces_audio_suffix(tmp_path):
 
 
 def test_detect_tts_engine_requires_mimo_key(monkeypatch):
-    """MiMo TTS is the only engine; with no key configured it must raise (no edge fallback)."""
+    """Auto remains MiMo-compatible when neither provider credential is configured."""
     monkeypatch.setitem(CONFIG, "mimo_tts_api_key", "")
     with pytest.raises(RuntimeError, match="没有可用的 TTS 引擎|MiMo"):
         _detect_tts_engine()

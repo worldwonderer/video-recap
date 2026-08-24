@@ -1,21 +1,12 @@
 """Own recap timeline artifacts, continuation state, and cut QC surfaces."""
 
 import hashlib
-
 import json
-
 import math
-
 import os
-
 import shlex
-
-
 import sys
-
 from pathlib import Path
-
-
 from recap_runtime import (
     _coerce_videos,
     _entry,
@@ -34,7 +25,8 @@ CUT_TIMELINE_CRAFT_BULLETS = [
     "- 每个片段必须对应 `recap_story_plan.json` 中的一个 change-based beat；删除后不损失因果、人物或情绪的片段通常不保留。",
     "- `reason` 统一写成 `beat_id | function | change | POV | preferred moment | 入点 | 出点`，不能只写 hook、重要剧情或事件摘要。",
     "- 优先保留因果、揭示、决定、关系移动、情绪转向与不可替代的表演/反应；跳过片尾、广告、重复静态画面和水印废片段。",
-    "- 片段长度服从具体时刻；在完整台词、完整动作或自然声音边界结束，避免原声从半句中切入或切出。",
+    "- 片段追求最短但完整：建立镜头可以短，关键表演/反应允许多停一点；在完整台词、完整动作或自然声音边界结束，避免原声从半句中切入或切出。",
+    "- 新人物/地点/情绪场景先给画面建立空间，再进旁白；不要在原片叠化或闪白中间再切一次。scene score 只用于定位候选接点，最终必须播放接点前后判断。",
 ]
 
 MULTI_SOURCE_NARRATION_CRAFT_BULLETS = [
@@ -42,7 +34,7 @@ MULTI_SOURCE_NARRATION_CRAFT_BULLETS = [
     "- 先为每个 beat 指定 `audio_owner`，再决定是否需要旁白；允许 original_dialogue、action_sound、ambience、music、silence 或 narration 主导。",
     "- 旁白只承担 context、causal_link、foreshadow、interpretation 或 transition；`narration_job=none` 的 beat 不写旁白。",
     "- 7:3 不是配额，只是素材无法给出更好判断时的粗略回退；强对白、动作声、环境或沉默可以完整拥有一个 beat。",
-    "- 旁白拥有 beat 时才写成 2–4 个完整句子的连续 BLOCK；不要把每个 beat 都机械变成旁白块或固定原声留白。",
+    "- 旁白拥有 beat 时才写成一个连续思路的 BLOCK；句数不是目标，字幕拆 cue 也不能切碎 TTS。不要把每个 beat 都机械变成旁白块或固定原声留白。",
     "- 使用 kept-clip map 与每个 source work_dir 核对人物、事实、ASR 和上下文；跨源转场必须有明确叙事任务。",
 ]
 
@@ -333,6 +325,8 @@ def _continuation_command(video, work_dir, args):
         parts.append("--consolidate-asr")
     if getattr(args, "mimo_tts_voice", None):
         parts += ["--mimo-tts-voice", args.mimo_tts_voice]
+    if getattr(args, "tts_provider", "auto") != "auto":
+        parts += ["--tts-provider", args.tts_provider]
     if getattr(args, "voice_ref", None):
         parts += ["--voice-ref", args.voice_ref]
     if getattr(args, "allow_partial_tts", False):
@@ -470,7 +464,7 @@ def _write_multi_source_clip_brief(work_dir, source_records, args):
         "",
         "## 创作决定",
         "",
-        "先比较至少两个可行剪辑假设，再写 `recap_story_plan.json` 与 `visual_audio_board.json`。前者记录观众承诺、POV、戏剧问题、选定主线及 change-based beats；后者记录每拍的具体画面/反应、入点/出点、原声锚点、`audio_owner` 与 `narration_job`。",
+        "先判断创作控制模式：CREATE 比较至少两个可行剪辑假设；DIRECTED 落实用户指定结构；REVISION 只改最新反馈点并冻结未点名内容。然后写或更新 `recap_story_plan.json` 与 `visual_audio_board.json`。前者记录观众承诺、POV、戏剧问题、选定主线及 change-based beats；后者记录每拍的具体画面/反应、入点/出点、原声锚点、`audio_owner` 与 `narration_job`。",
         "",
         "多视频不是把每个来源各做一段小总结。每个来源片段都必须服务同一条主线，并用 `source_id` 保留证据归属。这两份计划是 Agent 与建议型评审使用的工作记录，不是 CLI 渲染门禁。",
         "",

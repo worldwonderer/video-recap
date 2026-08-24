@@ -85,6 +85,56 @@ def test_doctor_fails_without_mimo_key(monkeypatch):
     assert "default_recap_pipeline" in _capability_names(report, "blocked")
 
 
+def test_doctor_accepts_fish_audio_as_the_selected_tts_provider(monkeypatch):
+    _tools_present(monkeypatch)
+    monkeypatch.setitem(doctor.CONFIG, "api_key", "tp-x")
+    monkeypatch.setitem(doctor.CONFIG, "mimo_video_api_key", "tp-x")
+    monkeypatch.setitem(doctor.CONFIG, "mimo_asr_api_key", "tp-x")
+    monkeypatch.setitem(doctor.CONFIG, "mimo_tts_api_key", "")
+    monkeypatch.setitem(doctor.CONFIG, "tts_provider", "fish-audio")
+    monkeypatch.setitem(doctor.CONFIG, "fish_api_key", "sk-fish-test")
+
+    report = doctor.build_report()
+
+    assert report["ok"] is True
+    assert report["checks"]["tts"]["provider"] == "fish-audio"
+    assert "fish_audio_tts" in _capability_names(report, "ready")
+    assert "default_recap_pipeline" in _capability_names(report, "ready")
+
+
+def test_doctor_provider_override_does_not_mutate_global_config(monkeypatch):
+    _tools_present(monkeypatch)
+    monkeypatch.setitem(doctor.CONFIG, "tts_provider", "mimo-tts")
+    monkeypatch.setitem(doctor.CONFIG, "fish_api_key", "sk-fish-test")
+
+    report = doctor.build_report(tts_provider="fish-audio")
+
+    assert report["checks"]["tts"]["provider"] == "fish-audio"
+    assert doctor.CONFIG["tts_provider"] == "mimo-tts"
+
+
+def test_doctor_rejects_invalid_environment_provider(monkeypatch):
+    _tools_present(monkeypatch)
+    monkeypatch.setitem(doctor.CONFIG, "tts_provider", "fish")
+
+    report = doctor.build_report()
+
+    assert report["ok"] is False
+    assert any("TTS_PROVIDER" in failure for failure in report["failures"])
+
+
+def test_doctor_reports_default_fish_voice_source(monkeypatch, capsys):
+    _tools_present(monkeypatch)
+    monkeypatch.setitem(doctor.CONFIG, "tts_provider", "fish-audio")
+    monkeypatch.setitem(doctor.CONFIG, "fish_api_key", "sk-fish-test")
+    monkeypatch.setitem(doctor.CONFIG, "fish_tts_reference_id", "voice-id")
+    monkeypatch.setitem(doctor.CONFIG, "fish_tts_reference_id_source", "default")
+
+    doctor._print_human(doctor.build_report())
+
+    assert "TTS voice reference ID: set (source: default)" in capsys.readouterr().out
+
+
 def test_doctor_missing_ffmpeg_is_failure(monkeypatch):
     monkeypatch.setattr("doctor._ffmpeg_filters", lambda: set())
     monkeypatch.setattr("doctor._command_path", lambda name: None)
@@ -490,6 +540,7 @@ def test_recap_continuation_preserves_phase_b_flags(tmp_path):
     work = tmp_path / "work dir"
     args = _manifest_args()
     args.mimo_tts_voice = "冰糖"
+    args.tts_provider = "mimo-tts"
     args.burn_subtitles = True
     args.output_dir = str(tmp_path / "out dir")
     args.export_jianying = True
@@ -502,6 +553,7 @@ def test_recap_continuation_preserves_phase_b_flags(tmp_path):
     cmd = recap_timeline._continuation_command(video, work, args)
 
     assert "--mimo-tts-voice" in cmd and "冰糖" in cmd
+    assert "--tts-provider mimo-tts" in cmd
     assert "--allow-partial-tts" in cmd
     assert "--allow-duration-drift" in cmd
     assert "--burn-subtitles" in cmd
@@ -512,7 +564,7 @@ def test_recap_continuation_preserves_phase_b_flags(tmp_path):
     assert "--no-review-narration" in cmd
 
 
-def test_recap_forwards_allow_partial_tts_to_voiceover(monkeypatch, tmp_path):
+def test_recap_forwards_tts_provider_and_allow_partial_to_voiceover(monkeypatch, tmp_path):
     video = tmp_path / "video.mp4"
     video.write_bytes(b"video")
     work = tmp_path / "work"
@@ -543,6 +595,8 @@ def test_recap_forwards_allow_partial_tts_to_voiceover(monkeypatch, tmp_path):
             "--work-dir",
             str(work),
             "--allow-partial-tts",
+            "--tts-provider",
+            "fish-audio",
         ],
     )
 
@@ -552,6 +606,48 @@ def test_recap_forwards_allow_partial_tts_to_voiceover(monkeypatch, tmp_path):
         call for call in calls if call[:2] == ("video-voiceover", "voiceover.py")
     )
     assert "--allow-partial-tts" in voiceover_call[2]
+    assert voiceover_call[2][voiceover_call[2].index("--tts-provider") + 1] == "fish-audio"
+
+
+def test_recap_forwards_explicit_tts_provider_to_doctor(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "recap_runner._run",
+        lambda skill, script, *args: calls.append(
+            (skill, script, [str(arg) for arg in args])
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["recap_runner.py", "--doctor", "--tts-provider", "fish-audio"],
+    )
+
+    recap.main()
+
+    assert calls == [
+        ("video-recap", "doctor.py", ["--tts-provider", "fish-audio"])
+    ]
+
+
+def test_recap_rejects_fish_audio_for_dub_mode(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "recap_runner.py",
+            str(tmp_path / "video.mp4"),
+            "--edit-mode",
+            "dub",
+            "--tts-provider",
+            "fish-audio",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="2"):
+        recap.main()
+
+    assert "dub uses MiMo voice cloning" in capsys.readouterr().err
 
 
 def test_recap_phase_b_allows_environment_changes_when_artifacts_are_unchanged(

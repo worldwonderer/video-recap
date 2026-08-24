@@ -18,6 +18,9 @@ MIMO_TOKEN_PLAN_API_URLS = {
 DEFAULT_MIMO_MODEL = "mimo-v2.5"          # VLM / chat (vision understanding)
 DEFAULT_MIMO_ASR_MODEL = "mimo-v2.5-asr"  # speech-to-text
 DEFAULT_MIMO_TTS_MODEL = "mimo-v2.5-tts"  # text-to-speech
+DEFAULT_FISH_TTS_API_URL = "https://api.fish.audio/v1/tts"
+DEFAULT_FISH_TTS_MODEL = "s2.1-pro-free"
+DEFAULT_FISH_TTS_REFERENCE_ID = "5653cea4ac83480aaf2bf45406556185"
 
 
 def normalize_api_url(raw_url):
@@ -158,6 +161,16 @@ CONFIG = {
     "mimo_tts_model_source": "env" if os.environ.get("MIMO_TTS_MODEL") else "default",
     "mimo_tts_voice": os.environ.get("MIMO_TTS_VOICE", "冰糖"),
     "mimo_tts_voice_source": "env" if os.environ.get("MIMO_TTS_VOICE") else "default",
+    "tts_provider": os.environ.get("TTS_PROVIDER", "auto").strip().lower(),
+    "fish_api_key": os.environ.get("FISH_API_KEY", ""),
+    "fish_tts_api_url": os.environ.get("FISH_TTS_API_URL", DEFAULT_FISH_TTS_API_URL),
+    "fish_tts_model": os.environ.get("FISH_TTS_MODEL", DEFAULT_FISH_TTS_MODEL),
+    "fish_tts_reference_id": os.environ.get(
+        "FISH_TTS_REFERENCE_ID", DEFAULT_FISH_TTS_REFERENCE_ID
+    ).strip(),
+    "fish_tts_reference_id_source": (
+        "env" if os.environ.get("FISH_TTS_REFERENCE_ID") else "default"
+    ),
     "vlm_workers": env_int("VLM_WORKERS", 8, minimum=1),  # VLM 并行分析线程数
 }
 

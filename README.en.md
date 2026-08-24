@@ -3,10 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)
 ![Powered by Xiaomi MiMo](https://img.shields.io/badge/AI-Xiaomi%20MiMo-green)
+![Fish Audio TTS](https://img.shields.io/badge/TTS-Fish%20Audio-blue)
 
 [中文](README.md) · English
 
-**In Claude Code, Codex CLI, OpenCode, or OpenClaw, one natural-language request turns a video into a Chinese-narration recap.** It needs only Python, `ffmpeg`, and one Xiaomi MiMo API key locally: no GPU, no model downloads, and it runs on macOS / Linux / Windows.
+**In Claude Code, Codex CLI, OpenCode, or OpenClaw, one natural-language request turns a video into a Chinese-narration recap.** It needs only Python, `ffmpeg`, and one Xiaomi MiMo API key locally; TTS can optionally use Fish Audio. No GPU or model downloads are required, and it runs on macOS / Linux / Windows.
 
 ## Demo
 
@@ -22,7 +23,7 @@ Beyond the rendered MP4, you can export a **剪映/JianYing draft** to keep edit
 flowchart LR
     video(["Video"]) --> understand["① Understand<br/>scenes · ASR · VLM"]
     research["Story research · optional"] -.-> understand
-    understand --> script["② Direct · Edit · Script<br/>agent"] --> voiceover["③ Voiceover<br/>MiMo TTS"] --> assemble["④ Assemble<br/>mux · subtitles"] --> output(["Recap"])
+    understand --> script["② Direct · Edit · Script<br/>agent"] --> voiceover["③ Voiceover<br/>MiMo / Fish Audio"] --> assemble["④ Assemble<br/>mux · subtitles"] --> output(["Recap"])
     understand -. cut mode · cut first .-> cut["Cut<br/>render first"] -.-> script
     classDef io fill:#4f86c6,stroke:#3a6298,color:#fff;
     classDef stage fill:#eef6ff,stroke:#4f86c6,color:#1f2937;
@@ -35,6 +36,7 @@ flowchart LR
 ## Why use it
 
 - **One key, runs anywhere.** ASR, VLM, and TTS all go through [Xiaomi MiMo](https://platform.xiaomimimo.com); the local runtime uses only Python's standard library and `ffmpeg`, with no `pip install`.
+- **Optional Fish Audio TTS.** Select `--tts-provider fish-audio` to use Fish Audio. Its current `s2.1-pro-free` model is useful for development, evaluation, and non-SLA workloads while the existing MiMo path remains the default.
 - **Research when it matters.** When the title/story context is known or the brief notes the material is thin, put character relationships and plot background in `background_research.json` so the VLM knows who's who.
 - **Make the editorial decision before allocating sound.** The agent first compares edit hypotheses and locks the POV, story spine, exact picture moments, and original-audio anchors. Narration is voiced as a block only when it has a defined job; strong dialogue, action sound, or silence may own an entire beat. A 7:3 split is only a rough fallback, never a quota.
 - **Cut first, frames aligned.** Cut mode renders the shortened video first, then writes narration against that output timeline, so picture and voice stay in sync.
@@ -48,7 +50,7 @@ flowchart LR
 
 - Python 3.10+
 - `ffmpeg` on `PATH`; subtitle burn-in is enabled by default and requires libass / the `subtitles` filter
-- One [Xiaomi MiMo](https://platform.xiaomimimo.com) API key for ASR, VLM, and TTS
+- One [Xiaomi MiMo](https://platform.xiaomimimo.com) API key for ASR, VLM, and the default TTS path
 
 ```bash
 brew install ffmpeg                         # macOS
@@ -59,7 +61,17 @@ export MIMO_API_KEY=your-mimo-key          # macOS / Linux
 export MIMO_TOKEN_PLAN_CLUSTER=cn          # optional for tp-* keys: cn | sgp | ams
 ```
 
-In Windows PowerShell, use `$env:MIMO_API_KEY="your-mimo-key"`. Pay-as-you-go `sk-*` keys default to `https://api.xiaomimimo.com/v1`. See the [config playbook](skills/video-recap/references/config-playbook.md) for model, voice, loudness, subtitle, and per-capability settings.
+In Windows PowerShell, use `$env:MIMO_API_KEY="your-mimo-key"`. MiMo does not require a subscription: `sk-*` keys can use pay-as-you-go billing. In one complete-video run measured for this project, usage cost about CNY 1.3; actual cost varies with video length and request volume. Pay-as-you-go keys default to `https://api.xiaomimimo.com/v1`.
+
+To use the currently free Fish Audio TTS path:
+
+```bash
+export TTS_PROVIDER=fish-audio
+export FISH_API_KEY=your-fish-key
+export FISH_TTS_REFERENCE_ID=your-voice-model-id  # optional; overrides the built-in “娱乐扒妹” voice
+```
+
+The default Fish model is `s2.1-pro-free`, with the built-in “娱乐扒妹” narration voice (reference ID `5653cea4ac83480aaf2bf45406556185`). Set `FISH_TTS_REFERENCE_ID` to override it. [Fish Audio currently states](https://fish.audio/blog/s2-1-pro-free-api/?articleLocale=en) that free access runs through **2026-08-31**, subject to its Fair Use Policy and without an SLA; check its current policy after that date. See the [config playbook](skills/video-recap/references/config-playbook.md) for model, voice, loudness, subtitle, and per-capability settings.
 
 ### 2. Choose an agent host
 
@@ -176,6 +188,14 @@ Use the voice from /path/to/voice-ref.wav for the recap of /path/to/video.mp4. I
 
 The reference audio is sent to MiMo for synthesis and its content fingerprint participates in cache validation. Use voice cloning only with the voice owner's authorization.
 
+**Use the currently free Fish Audio voiceover path:**
+
+```text
+Use Fish Audio for the Chinese narration of /path/to/video.mp4 with the built-in “娱乐扒妹” voice.
+```
+
+The agent passes `--tts-provider fish-audio` to the orchestrator. `FISH_API_KEY` is required; the built-in “娱乐扒妹” voice is used unless `FISH_TTS_REFERENCE_ID` overrides it. Local `--voice-ref` cloning remains specific to MiMo.
+
 **Dub an English video into Chinese while preserving the voice:**
 
 ```text
@@ -191,7 +211,7 @@ This replaces the original speech instead of overlaying commentary. The current 
 | **video-understanding** | scene detect · frame extract · ASR (`mimo-v2.5-asr`) · VLM (`mimo-v2.5`) · fuse timeline · build brief | `video` → `scenes / asr_result / vlm_analysis / silence_periods / timeline_fusion / agent_narration_brief.md` |
 | **video-script** | directing/story/picture/audio plan + narration + advisory review + lint/validate | `brief + index` → `recap_story_plan.json + visual_audio_board.json + [clip_plan.json] + narration.json` |
 | **video-cut** | clip plan → render the cut (cut-first/narrate-second; narration is written on the output timeline, no remap) | `clip_plan.json + video` → `edited_source.mp4` |
-| **video-voiceover** | synthesize narration audio (MiMo TTS, `mimo-v2.5-tts`) | `narration.json` → `tts_segments/ + tts_meta.json` |
+| **video-voiceover** | synthesize narration audio (MiMo `mimo-v2.5-tts` / Fish Audio `s2.1-pro-free`) | `narration.json` → `tts_segments/ + tts_meta.json` |
 | **video-assemble** | mux · duck original audio · render subtitles · multi-track timeline (optional 剪映 export) | `video + tts_meta` → `recap_<name>.mp4 + subtitles.srt/.ass + timeline.json` |
 | **video-recap** | orchestration and environment diagnostics | `video` → `recap_<name>.mp4` |
 

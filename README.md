@@ -3,10 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)
 ![Powered by Xiaomi MiMo](https://img.shields.io/badge/AI-Xiaomi%20MiMo-green)
+![Fish Audio TTS](https://img.shields.io/badge/TTS-Fish%20Audio-blue)
 
 中文 · [English](README.en.md)
 
-**在 Claude Code、Codex CLI、OpenCode 或 OpenClaw 里，用一句自然语言把视频变成中文解说成片。** 本地只需要 Python、`ffmpeg` 和一个小米 MiMo API Key；不用 GPU，不用下载模型，macOS / Linux / Windows 均可运行。
+**在 Claude Code、Codex CLI、OpenCode 或 OpenClaw 里，用一句自然语言把视频变成中文解说成片。** 本地只需要 Python、`ffmpeg` 和一个小米 MiMo API Key；TTS 也可切换到 Fish Audio。不用 GPU，不用下载模型，macOS / Linux / Windows 均可运行。
 
 ## 演示
 
@@ -22,7 +23,7 @@
 flowchart LR
     video(["视频"]) --> understand["① 理解<br/>场景 · ASR · VLM"]
     research["背景调研 · 可选"] -.-> understand
-    understand --> script["② 导演 · 剪辑 · 写稿<br/>Agent"] --> voiceover["③ 配音<br/>MiMo TTS"] --> assemble["④ 组装<br/>混音 · 字幕"] --> output(["Recap"])
+    understand --> script["② 导演 · 剪辑 · 写稿<br/>Agent"] --> voiceover["③ 配音<br/>MiMo / Fish Audio"] --> assemble["④ 组装<br/>混音 · 字幕"] --> output(["Recap"])
     understand -. 剪辑模式 · 先剪后配 .-> cut["剪辑<br/>先剪成片"] -.-> script
     classDef io fill:#4f86c6,stroke:#3a6298,color:#fff;
     classDef stage fill:#eef6ff,stroke:#4f86c6,color:#1f2937;
@@ -35,6 +36,7 @@ flowchart LR
 ## 为什么用它
 
 - **一个 key 跑全程。** ASR、VLM、TTS 全走[小米 MiMo](https://platform.xiaomimimo.com)；本地运行时只有 Python 标准库和 `ffmpeg`，不用 `pip install`。
+- **TTS 可切 Fish Audio。** `--tts-provider fish-audio` 即可使用 Fish Audio；当前 `s2.1-pro-free` 免费模型适合开发、试用和非 SLA 场景，保留原有 MiMo 默认路径。
 - **该查资料时先查。** 片名/剧情明确或 brief 提示素材偏薄时，把人物关系、剧情背景存进 `background_research.json`，VLM 才更容易认出谁是谁。
 - **先做创作决定，再分配声音。** Agent 先比较剪辑假设，锁定 POV、主线、具体画面与原声锚点；旁白有明确任务时才整块配音，强对白、动作声或沉默可以完整主导一个 beat。七三开只是在素材判断不足时的粗略回退，不是配额。
 - **先剪后配，画面对齐。** 剪辑模式先把长视频剪成成片，再对着成片写解说，时间轴天然对齐。
@@ -48,7 +50,7 @@ flowchart LR
 
 - Python 3.10+
 - `PATH` 上可用的 `ffmpeg`；默认烧录字幕，因此需要带 libass / `subtitles` 滤镜
-- 一个[小米 MiMo](https://platform.xiaomimimo.com) API Key，同时驱动 ASR、VLM 和 TTS
+- 一个[小米 MiMo](https://platform.xiaomimimo.com) API Key，驱动 ASR、VLM 和默认 TTS
 
 ```bash
 brew install ffmpeg                         # macOS
@@ -59,7 +61,17 @@ export MIMO_API_KEY=your-mimo-key          # macOS / Linux
 export MIMO_TOKEN_PLAN_CLUSTER=cn          # tp-* key 可选：cn | sgp | ams
 ```
 
-Windows PowerShell 使用 `$env:MIMO_API_KEY="your-mimo-key"`。按量付费的 `sk-*` key 默认连接 `https://api.xiaomimimo.com/v1`；模型、音色、响度和字幕等高级配置见[配置手册](skills/video-recap/references/config-playbook.md)。
+Windows PowerShell 使用 `$env:MIMO_API_KEY="your-mimo-key"`。MiMo 不一定要开通订阅：`sk-*` key 可直接按量付费，按本项目一次完整视频实测，一条视频仅消耗约 1.3 元（实际费用会随视频时长和调用量变化），默认连接 `https://api.xiaomimimo.com/v1`。
+
+如需使用 Fish Audio 免费 TTS：
+
+```bash
+export TTS_PROVIDER=fish-audio
+export FISH_API_KEY=your-fish-key
+export FISH_TTS_REFERENCE_ID=your-voice-model-id  # 可选；覆盖内置“娱乐扒妹”解说音色
+```
+
+当前默认使用 `s2.1-pro-free` 和“娱乐扒妹”音色（reference ID：`5653cea4ac83480aaf2bf45406556185`）；设置 `FISH_TTS_REFERENCE_ID` 可覆盖默认音色。[Fish Audio 官方现行说明](https://fish.audio/blog/s2-1-pro-free-api/?articleLocale=en)为免费开放至 **2026-08-31**，受 Fair Use Policy 约束、无 SLA；之后请以官方政策为准。模型、音色、响度和字幕等高级配置见[配置手册](skills/video-recap/references/config-playbook.md)。
 
 ### 2. 选择 Agent 宿主
 
@@ -176,6 +188,14 @@ MiMo 复核始终是 advisory：每个阶段最多一次请求，失败开放，
 
 参考音频会发送给 MiMo 用于合成，其内容指纹参与缓存校验。仅在获得音色所有者授权时使用。
 
+**改用当前免费的 Fish Audio 配音：**
+
+```text
+用 Fish Audio 给 /path/to/video.mp4 做中文解说；使用默认的“娱乐扒妹”音色。
+```
+
+Agent 会向编排器传入 `--tts-provider fish-audio`；需要 `FISH_API_KEY`，默认使用“娱乐扒妹”音色，也可通过 `FISH_TTS_REFERENCE_ID` 覆盖。本地 `--voice-ref` 克隆仍只属于 MiMo 路径。
+
 **英语视频译成中文并保留原音色：**
 
 ```text
@@ -191,7 +211,7 @@ MiMo 复核始终是 advisory：每个阶段最多一次请求，失败开放，
 | **video-understanding** | 场景检测 · 抽帧 · ASR（`mimo-v2.5-asr`）· VLM（`mimo-v2.5`）· 时间轴融合 · 生成 brief | `视频` → `scenes / asr_result / vlm_analysis / silence_periods / timeline_fusion / agent_narration_brief.md` |
 | **video-script** | 导演/故事/画面/声音方案 + 解说写作 + 建议型评审 + lint/校验 | `brief + 索引` → `recap_story_plan.json + visual_audio_board.json + [clip_plan.json] + narration.json` |
 | **video-cut** | 片段计划 → 拼剪成片（剪辑模式先剪后配，解说按成片时间轴写，无需重映射） | `clip_plan.json + 视频` → `edited_source.mp4` |
-| **video-voiceover** | 合成解说音频（MiMo TTS，`mimo-v2.5-tts`） | `narration.json` → `tts_segments/ + tts_meta.json` |
+| **video-voiceover** | 合成解说音频（MiMo `mimo-v2.5-tts` / Fish Audio `s2.1-pro-free`） | `narration.json` → `tts_segments/ + tts_meta.json` |
 | **video-assemble** | 混音 · 压低原声 · 渲染字幕 · 多轨时间线（可选导出剪映） | `视频 + tts_meta` → `recap_<名>.mp4 + subtitles.srt/.ass + timeline.json` |
 | **video-recap** | 编排器与环境诊断 | `视频` → `recap_<名>.mp4` |
 
