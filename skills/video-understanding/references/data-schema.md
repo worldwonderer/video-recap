@@ -137,16 +137,16 @@ Agent 撰写的解说词。full 模式下使用原视频时间；**两阶段 cut
 
 ## style_card.json（Agent 撰写，可选/按 brief 要求）
 
-`style_card.json` 是表达层契约：由 Agent 根据 `--style`、`--context`、素材证据、ASR 和用户偏好信号综合撰写。`--style` 是 freeform verbatim guidance（原样自由文本指导），不是枚举、preset、switch，也不是一组可穷举风格名；不要把它翻译成固定档位。
+`style_card.json` 是表达层契约：由 Agent 根据 `--style`、`--context`、素材证据、ASR 和用户偏好信号综合撰写。`--style` 是 freeform verbatim guidance（原样自由文本指导），不是枚举、preset、switch，也不是一组可穷举风格名；不要把它翻译成固定档位。它是当前版本的活动契约：用户对声音、节奏、字幕阅读或禁忌提出新反馈后，更新原文件并移除过期偏好，不要只改 `narration.json`。
 
 这个文件记录声音、节奏、回收意图和证据支撑的表达判断；字段可以随项目增减，下游只把它当 JSON object 读取，不要求固定键名。它不负责标题、封面、首句承诺或卖点包装。
 
 ```json
 {
   "voice": "冷静但有压迫感，少讲大道理，多用人物动作和台词里的证据推进",
-  "pacing": "前 15 秒短句建立冲突，中段留原声喘息，结尾回收开头疑问",
+  "pacing": "前 15 秒紧凑建立冲突，每个 beat 连续说完一个思路；中段留原声喘息，结尾回收开头疑问",
   "payoff_intent": "让观众先看到误会，再看到人物选择的代价",
-  "subtitle_read_posture": "句子可听、可读，不堆长抽象句",
+  "subtitle_read_posture": "TTS 保持连续口语，字幕按阅读宽度拆 cue，不用字幕换行切碎朗读",
   "evidence_intent": ["优先引用画面动作", "关键转折保留原声"]
 }
 ```

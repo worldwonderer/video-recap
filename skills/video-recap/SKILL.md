@@ -20,20 +20,29 @@ video-understanding ─▶ Agent 按 video-script 制定方案并写稿 ─▶ [
 
 ## 2. 创作职责
 
-这不是单纯的 JSON / 渲染流水线。Agent 是本次内容的创作负责人，在进入昂贵的下游处理前，必须按顺序完成五次判断：
+这不是单纯的 JSON / 渲染流水线。Agent 是本次内容的创作负责人。先判断本轮的**创作控制模式**；它与 `--edit-mode full|cut|dub` 是两个维度：
+
+- **CREATE**：从素材创作新成片。比较真正可行的故事/剪辑假设，再选择主线。
+- **DIRECTED**：用户已经指定结构、镜头、台词或包装方向。把这些决定当作基线落实，不为满足模板而另起方案。
+- **REVISION**：用户针对已有版本看片修改。最新反馈覆盖旧决定；本轮未点名的故事、镜头、声音和包装默认冻结，不重新发散创作。
+
+REVISION 开始前先明确“本轮修改项”和“冻结项”。表达、节奏、字幕反馈写回 `style_card.json`，镜头、入出点和声音分工写回 `visual_audio_board.json`；只有观众承诺、POV、主线或故事 beat 改变时才更新 `recap_story_plan.json`。删除成片内容时同步删除计划中的旧描述，不能让工作产物继续指导已不存在的镜头。
+
+确定模式后，在进入昂贵的下游处理前完成五次判断：
 
 1. **导演判断**：确定观众承诺、POV、戏剧问题、情绪终点，以及哪些信息要保留到后面揭示。
-2. **故事编辑**：比较至少两个可行的剪辑假设，选择一条主线，并把 beat 定义为“发生了什么变化”，而不是场景摘要。
+2. **故事编辑**：CREATE 比较至少两个可行的剪辑假设；DIRECTED / REVISION 继承用户指定或已确认的主线。beat 始终定义为“发生了什么变化”，而不是场景摘要。
 3. **画面剪辑**：选择真正值得保留的具体时刻、人物反应、入点与出点。
 4. **声音/旁白**：先分配画面、原声、沉默和旁白的任务，再写解说词。
 5. **观众复核**：分别检查无旁白、只听声音和第一次观看时的体验，优先修改回报最高的问题。
 
 执行前阅读本技能的 `references/creative-editing-playbook.md`，并把简洁的创作决定写入：
 
-- `recap_story_plan.json`：导演意图、备选假设、选定主线和基于变化的 beat 图。
+- `recap_story_plan.json`：导演意图、适用时的备选假设、选定主线和基于变化的 beat 图。
 - `visual_audio_board.json`：每拍的画面任务、表演/反应选择、原声锚点、`audio_owner` 与 `narration_job`。
+- `style_card.json`（有表达要求或表达反馈时）：当前声音、口语节奏、字幕阅读姿态与明确禁忌。
 
-这两个文件只记录可审计的决定，不记录冗长思维过程；它们不会增加服务或渲染依赖。现有工具可以忽略它们，Agent 与建议型解说评审会用它们保持创作一致。建立这条内容基线不需要平台数据。
+这些文件只记录可审计的当前决定，不记录冗长思维过程；它们不会增加服务或渲染依赖。现有工具可以忽略它们，Agent 与建议型解说评审会用它们保持创作一致。建立这条内容基线不需要平台数据。
 
 ## 3. 环境与脚本路径
 
@@ -47,6 +56,8 @@ export MIMO_API_KEY=***
 - ASR：`mimo-v2.5-asr`
 - VLM：`mimo-v2.5`
 - TTS：`mimo-v2.5-tts`
+
+TTS 可通过 `--tts-provider fish-audio` / `TTS_PROVIDER=fish-audio` 改用 Fish Audio；此时另需 `FISH_API_KEY`，默认模型为 `s2.1-pro-free`，默认使用“娱乐扒妹”音色（`5653cea4ac83480aaf2bf45406556185`），可用 `FISH_TTS_REFERENCE_ID` 覆盖。ASR/VLM 仍使用 MiMo。
 
 `tp-*` Token Plan 密钥默认使用中国区集群，可用 `MIMO_TOKEN_PLAN_CLUSTER` 覆盖。
 
@@ -133,6 +144,18 @@ python3 tools/measure_subtitle.py <video>
 
 解说模式如需克隆参考声音，使用 `--voice-ref <audio>`；它与 dub 模式不同。
 
+### 4.6 最终观看与交付复核
+
+脚本、接点检测、样帧和 QC 报告都不能替代观看。每轮准备交付前，必须检查**本轮实际要交付的最终文件**，而不是旧别名、无字幕母版或中间代理：
+
+1. 正常速度完整播放一次短片，不边看边改；先记录真实观看问题。
+2. 播放每个拼接点前后约 0.5–1 秒，检查闪帧、原片叠化被截断、动作跳变和半句原声。
+3. 完整只听声音一次，检查旁白是否碎成一句一停、场景间声音是否接得上、关键原声是否完整。
+4. 单独复看开头、核心情绪/表演点和结尾，确认进入时机、回报停留和收束都成立。
+5. REVISION 分别验证本轮修改项已经改变、冻结项没有意外变化；然后再做解码、时长、音画规格等机械检查。
+
+scene score、亮度统计、contact sheet 与自动 QC 只负责定位候选问题；最终判断以真实播放为准。短时间内出现密集候选时，必须判断每个切点来自原片还是本次拼接：原片无关短镜头整段删，相关短镜头扩展到完整动作/反应；人工拼接点优先移动边界、恢复同源连续运动或合并片段，能消除就不保留。修复失败时回到剪点、声音或文案层，不用更多包装掩盖。
+
 ## 5. 英译中原声复刻模式
 
 `--edit-mode dub` 把英文视频翻译为中文，并用原说话者的克隆音色替换人声；它不是在压低原声上叠加解说。
@@ -175,7 +198,7 @@ python3 scripts/recap.py --doctor
 
 `--context`、`--scene-threshold`、`--style`、`--edit-mode {full,cut,dub}`、`--target-duration`、
 `--skip-asr`、`--mimo-video-overview`、`--mimo-qc {off,pre-assemble,post-render,both}`、
-`--mimo-qc-refresh`、`--consolidate`、`--consolidate-asr`、`--mimo-tts-voice`、`--voice-ref`、
+`--mimo-qc-refresh`、`--consolidate`、`--consolidate-asr`、`--tts-provider`、`--mimo-tts-voice`、`--voice-ref`、
 `--allow-partial-tts`、`--review-narration`、`--no-review-narration`、`--require-narration-review`、
 `--subtitle-y-top`、`--subtitle-y-bot`、`--no-burn-subtitles`、`--output-dir`、
 `--export-jianying`、`--jianying-bundle-media`、`--jianying-no-bundle-media`、

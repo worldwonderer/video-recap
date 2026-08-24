@@ -10,13 +10,24 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
 
+from fish_audio import synthesize_fish_audio
 from lib import CONFIG
-from lib import log, mimo_tts_api_call, get_video_duration, narration_tempo_budget, run_cmd
-from lib import _truncate_at_sentence, _text_char_count, stable_hash, file_fingerprint
+from lib import (
+    _text_char_count,
+    _truncate_at_sentence,
+    file_fingerprint,
+    get_video_duration,
+    log,
+    mimo_tts_api_call,
+    narration_tempo_budget,
+    run_cmd,
+    stable_hash,
+)
+
 # Re-exported: tests and callers reach these through voiceover, the module owns the flow.
 from tts_audio import _maybe_normalize_tts_wav, _normalize_tts_wav_rms  # noqa: F401
 
-SUPPORTED_TTS_ENGINES = {"mimo-tts"}
+SUPPORTED_TTS_ENGINES = {"mimo-tts", "fish-audio"}
 SEGMENT_AUDIO_SCHEMA_VERSION = 1
 TTS_CACHE_VERSION = 2
 VOICE_REFERENCE_PREP_VERSION = 1
@@ -213,7 +224,11 @@ def synthesize_tts(narration, work_dir):
     if not narration:
         raise RuntimeError("narration.json 没有可配音的解说段，已中止以避免生成无解说视频")
 
-    cache_engine = "mimo-tts"
+    cache_engine = _configured_tts_engine_for_cache()
+    if cache_engine == "fish-audio" and voice_ref:
+        raise RuntimeError(
+            "Fish Audio 不接受本地 VOICE_REF/--voice-ref；请改用 FISH_TTS_REFERENCE_ID"
+        )
     cached_segments = []
     needs_fresh = False
     prepared_count = 0
@@ -237,9 +252,6 @@ def synthesize_tts(narration, work_dir):
         return cached_segments, cache_engine
 
     engine = resolve_tts_engine()
-    if engine == "mimo-tts" and not CONFIG.get("mimo_tts_api_key"):
-        key_name = CONFIG.get("mimo_tts_api_key_source", "MIMO_API_KEY")
-        raise RuntimeError(f"请设置 {key_name} 环境变量用于 MiMo TTS")
 
     if voice_ref:
         _cache_prepared_voice_reference(voice_ref)
@@ -301,9 +313,13 @@ def _run_tts_engine(engine, text, output_wav, rate="+0%", pitch="+0Hz", emotion=
             _cleanup_partial_tts_outputs(output_wav)
             if engine == "mimo-tts":
                 _tts_mimo(text, output_wav, rate=rate, pitch=pitch, emotion=emotion)
+            elif engine == "fish-audio":
+                synthesize_fish_audio(
+                    text, output_wav, rate=rate, pitch=pitch, emotion=emotion
+                )
             else:
                 raise RuntimeError(
-                    f"不支持的 TTS 引擎: {engine}。当前仅支持 mimo-tts。"
+                    f"不支持的 TTS 引擎: {engine}。当前支持 mimo-tts、fish-audio。"
                 )
 
             dur = _get_audio_duration(output_wav)
@@ -325,8 +341,9 @@ def _cleanup_partial_tts_outputs(output_wav):
     """Remove stale partial media files before/after a failed TTS attempt."""
     wav_path = Path(output_wav)
     mp3_path = wav_path.with_suffix(".mp3")
+    partial_path = Path(str(wav_path) + ".part")
     cache_path = str(_tts_segment_cache_path(output_wav))
-    for path in (str(wav_path), str(mp3_path), cache_path):
+    for path in (str(wav_path), str(mp3_path), str(partial_path), cache_path):
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -454,24 +471,48 @@ def _write_tts_segment_cache(output_wav, cache_key, spoken_text, duration, rate_
         log(f"  TTS 缓存元数据写入失败（忽略）: {exc}")
 
 
+def _configured_tts_engine_for_cache():
+    """Resolve provider intent without requiring a live credential for cache probes."""
+    provider = str(CONFIG.get("tts_provider") or "auto").strip().lower()
+    if provider == "auto":
+        if CONFIG.get("mimo_tts_api_key") or not CONFIG.get("fish_api_key"):
+            return "mimo-tts"
+        return "fish-audio"
+    if provider not in SUPPORTED_TTS_ENGINES:
+        raise RuntimeError(
+            "TTS_PROVIDER/--tts-provider 必须是 auto、mimo-tts 或 fish-audio"
+        )
+    return provider
+
+
 def _detect_tts_engine():
-    """MiMo TTS is the only engine; require a MiMo key."""
-    if CONFIG.get("mimo_tts_api_key"):
-        return "mimo-tts"
+    """Select the configured provider and require its credential."""
+    return _require_tts_credential(_configured_tts_engine_for_cache())
+
+
+def _require_tts_credential(engine):
+    """Require the credential for an already-resolved TTS provider."""
+    if engine == "mimo-tts" and CONFIG.get("mimo_tts_api_key"):
+        return engine
+    if engine == "fish-audio" and CONFIG.get("fish_api_key"):
+        return engine
+    if engine == "fish-audio":
+        raise RuntimeError("没有可用的 TTS 引擎：请设置 FISH_API_KEY（Fish Audio 需要）。")
     key_name = CONFIG.get("mimo_tts_api_key_source", "MIMO_API_KEY")
     raise RuntimeError(f"没有可用的 TTS 引擎：请设置 {key_name}（MiMo TTS 需要）。")
 
 
 def resolve_tts_engine(prefer_existing=None):
-    """Resolve the TTS engine. MiMo TTS (mimo-v2.5-tts) is the only engine.
+    """Resolve the selected MiMo or Fish Audio TTS engine.
 
     `prefer_existing` lets an assemble-only rerun reuse already-generated audio
-    even when no fresh MiMo key is configured.
+    even when no fresh provider credential is configured.
     """
+    selected = _configured_tts_engine_for_cache()
     try:
-        return _detect_tts_engine()
+        return _require_tts_credential(selected)
     except RuntimeError:
-        if prefer_existing in SUPPORTED_TTS_ENGINES:
+        if prefer_existing == selected:
             return prefer_existing
         raise
 
@@ -482,10 +523,6 @@ def tts_settings_fingerprint(engine=None):
     settings = {
         "engine": resolved,
         "tts_dynamic_params": bool(CONFIG.get("tts_dynamic_params", True)),
-        "mimo_tts_api_url": CONFIG.get("mimo_tts_api_url"),
-        "mimo_tts_model": CONFIG.get("mimo_tts_model"),
-        "mimo_tts_voice": CONFIG.get("mimo_tts_voice"),
-        "mimo_tts_style": CONFIG.get("mimo_tts_style"),
         "narration_speed": float(CONFIG.get("narration_speed", 1.0) or 1.0),
         "narration_cumulative_tempo_max": float(CONFIG.get("narration_cumulative_tempo_max", 1.35) or 1.35),
         "narration_cumulative_tempo_hard_max": float(CONFIG.get("narration_cumulative_tempo_hard_max", 1.40) or 1.40),
@@ -494,8 +531,25 @@ def tts_settings_fingerprint(engine=None):
         "tts_segment_target_rms_dbfs": float(CONFIG.get("tts_segment_target_rms_dbfs", -20.0) or -20.0),
         "tts_segment_peak_limit": float(CONFIG.get("tts_segment_peak_limit", 0.98) or 0.98),
     }
+    if resolved == "fish-audio":
+        settings.update(
+            {
+                "fish_tts_api_url": CONFIG.get("fish_tts_api_url"),
+                "fish_tts_model": CONFIG.get("fish_tts_model"),
+                "fish_tts_reference_id": CONFIG.get("fish_tts_reference_id"),
+            }
+        )
+    else:
+        settings.update(
+            {
+                "mimo_tts_api_url": CONFIG.get("mimo_tts_api_url"),
+                "mimo_tts_model": CONFIG.get("mimo_tts_model"),
+                "mimo_tts_voice": CONFIG.get("mimo_tts_voice"),
+                "mimo_tts_style": CONFIG.get("mimo_tts_style"),
+            }
+        )
     voice_ref = str(CONFIG.get("voice_ref") or "").strip()
-    if voice_ref:
+    if voice_ref and resolved == "mimo-tts":
         ref_path = Path(voice_ref).expanduser()
         settings.pop("mimo_tts_voice", None)  # ignored by the voiceclone API
         settings["voice_ref_fingerprint"] = _voice_reference_fingerprint(ref_path)
@@ -666,12 +720,19 @@ def main():
     ap.add_argument("--narration", default=None,
                     help="narration json (default: <work-dir>/narration.json; pass narration_mapped.json explicitly for legacy cut runs)")
     ap.add_argument("--mimo-voice", default=None, help="MiMo TTS voice name")
+    ap.add_argument(
+        "--tts-provider",
+        default=os.environ.get("TTS_PROVIDER", "auto"),
+        choices=["auto", "mimo-tts", "fish-audio"],
+        help="TTS provider (default: MiMo when configured, otherwise Fish Audio)",
+    )
     ap.add_argument("--voice-ref", default=None,
                     help="reference audio (wav/mp3/etc.) for mimo-v2.5-tts-voiceclone")
     ap.add_argument("--allow-partial-tts", action="store_true",
                     help="allow output when some narration segments fail TTS")
     args = ap.parse_args()
     work_dir = Path(args.work_dir)
+    CONFIG["tts_provider"] = args.tts_provider
     effective_voice_ref = (
         args.voice_ref if args.voice_ref is not None else os.environ.get("VOICE_REF", "").strip()
     )
@@ -689,6 +750,8 @@ def main():
         CONFIG["mimo_tts_voice"] = args.mimo_voice
     if args.mimo_voice and CONFIG.get("voice_ref"):
         ap.error("--mimo-voice and --voice-ref are mutually exclusive")
+    if args.tts_provider == "fish-audio" and (args.mimo_voice or CONFIG.get("voice_ref")):
+        ap.error("--mimo-voice/--voice-ref are only supported by the MiMo TTS provider")
     # Voice-reference normalization is intentionally lazy: a fully cached rerun should not
     # invoke ffmpeg. _tts_mimo uses a process-wide lock so a fresh parallel run still converts
     # the reference exactly once.

@@ -568,8 +568,8 @@ def lint_narration(
                     None,
                     "fragmented_beats",
                     "Beats are fragmented into single short sentences; each is synthesized as a separate TTS "
-                    "utterance, which sounds choppy. Merge adjacent sentences into BLOCKS of 2-4 sentences "
-                    "(one continuous thought) so each block speaks as one fluent utterance.",
+                    "utterance, which sounds choppy. Merge adjacent related sentences into one fluent BLOCK "
+                    "that completes a continuous thought; sentence count is not the target.",
                     avg_block_chars=round(avg_chars, 1),
                     block_min_chars=block_min_chars,
                 )

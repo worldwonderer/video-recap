@@ -25,6 +25,9 @@ MIMO_TOKEN_PLAN_API_URLS = {
 DEFAULT_MIMO_MODEL = "mimo-v2.5"          # VLM / chat (vision understanding)
 DEFAULT_MIMO_ASR_MODEL = "mimo-v2.5-asr"  # speech-to-text
 DEFAULT_MIMO_TTS_MODEL = "mimo-v2.5-tts"  # text-to-speech
+DEFAULT_FISH_TTS_API_URL = "https://api.fish.audio/v1/tts"
+DEFAULT_FISH_TTS_MODEL = "s2.1-pro-free"
+DEFAULT_FISH_TTS_REFERENCE_ID = "5653cea4ac83480aaf2bf45406556185"
 
 
 def normalize_api_url(raw_url):
@@ -120,6 +123,14 @@ CONFIG = {
         "MIMO_TTS_STYLE",
         "自然、清晰、有感染力，像在给观众讲故事；随剧情起伏，该紧张时紧张、该动情时动情，不平铺直叙。",
     ),
+    "tts_provider": os.environ.get("TTS_PROVIDER", "auto").strip().lower(),
+    "tts_timeout": env_int("TTS_TIMEOUT", 300, minimum=1),
+    "fish_api_key": os.environ.get("FISH_API_KEY", ""),
+    "fish_tts_api_url": os.environ.get("FISH_TTS_API_URL", DEFAULT_FISH_TTS_API_URL),
+    "fish_tts_model": os.environ.get("FISH_TTS_MODEL", DEFAULT_FISH_TTS_MODEL),
+    "fish_tts_reference_id": os.environ.get(
+        "FISH_TTS_REFERENCE_ID", DEFAULT_FISH_TTS_REFERENCE_ID
+    ).strip(),
     "mimo_disable_thinking": env_bool("MIMO_DISABLE_THINKING", True),
     "breath_ms": 250,  # 段间呼吸空间(ms)；block recap 块内连贯、块间留原声呼吸
     "narration_speed": env_float("NARRATION_SPEED", 1.15, minimum=0.5),  # 解说整体提速(atempo)，默认回到可懂区间；长片可设 1.0
@@ -252,10 +263,13 @@ _ERROR_DATA_URL_RE = re.compile(
 _ERROR_KEY_RE = re.compile(r"\b(?:tp|sk)-[A-Za-z0-9_-]{8,}\b")
 
 
-def _sanitize_api_error(value, limit=500):
+def _sanitize_api_error(value, limit=500, *, extra_secrets=()):
     """Bound transport diagnostics without echoing request media or credentials."""
     text = _ERROR_DATA_URL_RE.sub("<redacted-data-url>", str(value or ""))
     text = _ERROR_KEY_RE.sub("<redacted-key>", text)
+    for secret in extra_secrets:
+        if secret:
+            text = text.replace(str(secret), "<redacted-key>")
     return text[:limit]
 
 def _api_headers(api_provider=None, api_url=None, api_key=None):

@@ -1,17 +1,14 @@
 """Orchestrate single- and multi-source recap pipelines."""
 
 import os
-
-
 from pathlib import Path
-
 
 import materials as material_lib
 
-from recap_cli import parse_args
+from recap_cli import TTS_PROVIDERS, parse_args
 from recap_review import run_narration_review
-
 from recap_runtime import (
+    _build_multi_source_records,
     _coerce_videos,
     _entry,
     _file_fingerprint,
@@ -21,6 +18,8 @@ from recap_runtime import (
     _probe_display_height_or_raise,
     _read_video_duration_or_raise,
     _run,
+    _write_multi_source_manifest,
+    _write_project_run_manifest,
     _write_run_manifest,
 )
 from recap_stage_qc import (
@@ -37,31 +36,38 @@ from recap_timeline import (
     _cut_narration_is_stale,
     _file_md5,
     _manifest_mismatches,
+    _material_library_dir,
+    _materials_enabled,
+    _multi_manifest_mismatches,
+    _pause_for_agent,
     _print_narration_review_pointer,
     _read_assembly_output,
     _read_phase_ledger,
-    _surface_cut_qc,
-    _write_canonical_visual_overlays,
-    _write_phase_ledger,
-)
-from recap_runtime import (
-    _build_multi_source_records,
-    _write_project_run_manifest,
-    _write_multi_source_manifest,
-)
-from recap_timeline import (
-    _multi_manifest_mismatches,
+    _save_materials_enabled,
     _source_work_dir,
+    _surface_cut_qc,
     _understand_args_for_source,
+    _write_canonical_visual_overlays,
     _write_multi_source_clip_brief,
     _write_multi_source_output_brief,
-    _material_library_dir,
-    _materials_enabled,
-    _save_materials_enabled,
-    _pause_for_agent,
+    _write_phase_ledger,
 )
 
 RUN_MANIFEST = "recap_run_manifest.json"
+
+
+def _voiceover_args(work_dir, narration_path, args):
+    """Build the shared full/cut invocation for video-voiceover."""
+    result = ["--work-dir", str(work_dir), "--narration", str(narration_path)]
+    if getattr(args, "tts_provider", "auto") != "auto":
+        result += ["--tts-provider", args.tts_provider]
+    if args.mimo_tts_voice:
+        result += ["--mimo-voice", args.mimo_tts_voice]
+    if args.voice_ref:
+        result += ["--voice-ref", args.voice_ref]
+    if args.allow_partial_tts:
+        result.append("--allow-partial-tts")
+    return result
 
 
 def _run_or_restore_understanding(source_record, source_work_dir, args):
@@ -259,14 +265,11 @@ def _run_multi_cut(videos, work_dir, args):
         "pre_tts",
         metadata={"review_ran": review_ran, "timeline": "cut_output"},
     )
-    vargs = ["--work-dir", str(work_dir), "--narration", str(narration_json)]
-    if args.mimo_tts_voice:
-        vargs += ["--mimo-voice", args.mimo_tts_voice]
-    if args.voice_ref:
-        vargs += ["--voice-ref", args.voice_ref]
-    if args.allow_partial_tts:
-        vargs.append("--allow-partial-tts")
-    _run("video-voiceover", "voiceover.py", *vargs)
+    _run(
+        "video-voiceover",
+        "voiceover.py",
+        *_voiceover_args(work_dir, narration_json, args),
+    )
     _write_shift_left_stage_qc(
         work_dir, "post_tts", metadata=_tts_qc_metadata(work_dir)
     )
@@ -322,9 +325,16 @@ def main():
         ap.error(
             "MIMO_QC/--mimo-qc must be one of: off, pre-assemble, post-render, both"
         )
+    if getattr(args, "tts_provider", "auto") not in TTS_PROVIDERS:
+        ap.error(
+            "TTS_PROVIDER/--tts-provider must be one of: auto, mimo-tts, fish-audio"
+        )
 
     if args.doctor:
-        _run("video-recap", "doctor.py")
+        doctor_args = []
+        if args.tts_provider != "auto":
+            doctor_args += ["--tts-provider", args.tts_provider]
+        _run("video-recap", "doctor.py", *doctor_args)
         return
     if not args.video:
         ap.error("video is required (unless --doctor)")
@@ -344,9 +354,20 @@ def main():
     )
     if explicit_mimo_voice and args.voice_ref:
         ap.error("--mimo-tts-voice and --voice-ref are mutually exclusive")
+    if getattr(args, "tts_provider", "auto") == "fish-audio" and (
+        explicit_mimo_voice or args.voice_ref
+    ):
+        ap.error(
+            "--mimo-tts-voice/--voice-ref are only supported by --tts-provider mimo-tts"
+        )
     if args.edit_mode == "dub" and args.voice_ref:
         ap.error(
             "--voice-ref is only supported in full/cut modes; dub clones the source voice automatically"
+        )
+    if args.edit_mode == "dub" and args.tts_provider == "fish-audio":
+        ap.error(
+            "--tts-provider fish-audio is only supported in full/cut modes; "
+            "dub uses MiMo voice cloning"
         )
     if args.edit_mode == "dub" and args.subtitle_y_top is not None:
         ap.error(
@@ -570,14 +591,11 @@ def main():
             "timeline": "cut_output" if cut else "source",
         },
     )
-    vargs = ["--work-dir", str(work_dir), "--narration", str(narration_for_tts)]
-    if args.mimo_tts_voice:
-        vargs += ["--mimo-voice", args.mimo_tts_voice]
-    if args.voice_ref:
-        vargs += ["--voice-ref", args.voice_ref]
-    if args.allow_partial_tts:
-        vargs.append("--allow-partial-tts")
-    _run("video-voiceover", "voiceover.py", *vargs)
+    _run(
+        "video-voiceover",
+        "voiceover.py",
+        *_voiceover_args(work_dir, narration_for_tts, args),
+    )
     _write_shift_left_stage_qc(
         work_dir, "post_tts", metadata=_tts_qc_metadata(work_dir)
     )

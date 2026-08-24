@@ -5,6 +5,8 @@ import os
 
 from recap_runtime import _env_bool
 
+TTS_PROVIDERS = ("auto", "mimo-tts", "fish-audio")
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -57,6 +59,12 @@ def parse_args():
         "--consolidate-asr", action="store_true", help="also clean ASR (Pass A)"
     )
     parser.add_argument("--mimo-tts-voice", default=None, help="MiMo TTS voice")
+    parser.add_argument(
+        "--tts-provider",
+        default=os.environ.get("TTS_PROVIDER", "auto"),
+        choices=TTS_PROVIDERS,
+        help="voiceover provider; auto prefers configured MiMo, then Fish Audio",
+    )
     parser.add_argument(
         "--voice-ref",
         default=None,
