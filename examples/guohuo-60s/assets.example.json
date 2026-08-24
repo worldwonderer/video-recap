@@ -26,6 +26,6 @@
   "input_contract": {
     "source_timebase": "Paths must preserve the episode timecodes used by clip_plan.json and picture-conform.json.",
     "video": "Pre-normalized SDR, square pixels, BT.709 primaries/transfer/matrix, limited range.",
-    "audio": "48 kHz stereo is recommended. Licensed episode audio, narration, music, and effects are supplied by the user and are not distributed here."
+    "audio": "48 kHz stereo is recommended for episode audio, narration, music, and effects."
   }
 }

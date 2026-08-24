@@ -14,7 +14,7 @@ video-understanding
   → 最终交付 QC
 ```
 
-完整的公开产物/省略产物清单见 [`workflow-manifest.json`](workflow-manifest.json)。这个 demo 展示的不是某个作品专用 preset，而是可复用的创作与交付方法：
+公开产物清单见 [`workflow-manifest.json`](workflow-manifest.json)。这个 demo 沉淀以下可复用的创作与交付方法：
 
 - 先用 `recap_story_plan.json` 锁定观众承诺、POV、戏剧问题和 change-based beats。
 - 用 `visual_audio_board.json` 决定每拍由画面、原声、动作声还是旁白主导。
@@ -24,7 +24,7 @@ video-understanding
 - 包装在画面、声音和字幕时序锁定后完成；花字只补情绪，不重复字幕信息。
 - 修复不自然接点时优先恢复原片连续运动，而不是叠加溶解、闪白或其他遮掩。
 
-复现入口是仓库的 `video-recap` Skill，不是 example 自带的一键脚本。另一个 Agent 可直接使用 [`skill-runbook.md`](skill-runbook.md) 中的任务请求，读取本目录的真实产物与看片反馈，重新走 Skills 流程。精简后的有效迭代链见 [`iteration-notes.md`](iteration-notes.md)。
+复现时按 [`skill-runbook.md`](skill-runbook.md) 使用 `video-recap` Skill；有效迭代链见 [`iteration-notes.md`](iteration-notes.md)。
 
 ## 成片
 
@@ -34,22 +34,22 @@ video-understanding
 <video src="https://github.com/user-attachments/assets/f3c2df0c-6869-4f5b-8f4c-cce70b58b667" width="720" controls></video>
 ```
 
-仓库不包含成片、原剧片段、TTS、原声、音效、抽帧或字体文件。压缩交付规格与校验结果见 [`delivery-qc.json`](delivery-qc.json)。
+压缩交付规格与校验结果见 [`delivery-qc.json`](delivery-qc.json)。
 
 ## 与 Skill 契约的对应关系
 
 | 阶段 | 公开文件 | 在真实流程中的职责 |
 |---|---|---|
-| research / understanding | [`background_research.json`](background_research.json)、[`multi_source_manifest.json`](multi_source_manifest.json) | 给理解阶段人物/剧情上下文，并固定多个来源的稳定 `source_id`。逐源 ASR、VLM、scene、silence、fusion 和 contact sheet 因来自未分发素材而不入库 |
+| research / understanding | [`background_research.json`](background_research.json)、[`multi_source_manifest.json`](multi_source_manifest.json) | 给理解阶段人物/剧情上下文，并固定多个来源的稳定 `source_id`；逐源分析在复现时重新生成 |
 | video-script pass 1 | [`recap_story_plan.json`](recap_story_plan.json)、[`visual_audio_board.json`](visual_audio_board.json)、[`style_card.json`](style_card.json)、[`clip_plan.json`](clip_plan.json) | 先定 POV、change-based beats、画面/声音分工，再按原片时间选择区间 |
 | video-cut | 无运行时产物入库 | Skill 根据 `clip_plan.json` 生成新的 `clip_plan_validated.json` 与 `edited_source.mp4`；本案例后续做过项目级画面 conform，因此不把扩展过的项目文件冒充 Skill 原生输出 |
 | video-script pass 2 | [`narration.json`](narration.json)、[`original_subtitles.json`](original_subtitles.json) | 对剪后成片写 7 个连续 TTS 块并保留采用的原声窗口；复现时由 Skill 根据新的 validated plan 重新生成句末锚点与校验报告 |
-| video-voiceover | 无媒体产物入库 | 本例旁白来自 Fish Audio。实际流程生成 `tts_meta.json` 与分段 WAV；公开 demo 不分发声音、凭证或运行时元数据 |
+| video-voiceover | 无媒体产物入库 | 本例旁白来自 Fish Audio；复现时重新生成分段音频 |
 | video-assemble | [`timeline.json`](timeline.json)、[`assembly_manifest.json`](assembly_manifest.json)、[`assembly_qc.json`](assembly_qc.json) | 展示多轨、ducking、逐段完整性、响度与发布门禁；路径已替换为逻辑占位 |
-| 可选声音/包装 | [`sfx_mix_plan.json`](sfx_mix_plan.json)、[`captions.json`](captions.json)、[`remotion/`](remotion/) | 音画锁定后探索低频音效、片名、花字和字幕透明层；Remotion 不是核心依赖 |
+| 可选声音/包装 | [`sfx_mix_plan.json`](sfx_mix_plan.json)、[`captions.json`](captions.json)、[`remotion/`](remotion/) | 音画锁定后探索低频音效、片名、花字和字幕透明层 |
 | REVISION / delivery | [`revision-log.json`](revision-log.json)、[`edit-map.json`](edit-map.json)、[`picture-conform.json`](picture-conform.json)、[`delivery-qc.json`](delivery-qc.json)、[`content-qc.md`](content-qc.md) | 把看片建议拆为修改项/冻结项，项目级 conform 后重新看片并做内容、压缩和交付复核 |
 
-这些 JSON 是面向公开案例整理的契约投影，只保留复现所需的结构、时间、采用判断和发布 QC；媒体路径统一写成 `MEDIA_NOT_DISTRIBUTED/...`，`episode-02` 等名称只是逻辑素材 ID。它们是下一次 Skill 运行的可审计基线，不是无需原片即可直接渲染的 fixture。合法输入映射模板见 [`assets.example.json`](assets.example.json)。
+这些 JSON 保留复现所需的结构、时间、采用判断和发布 QC；媒体路径使用 `MEDIA_NOT_DISTRIBUTED/...`，`episode-02` 等名称是逻辑素材 ID。合法输入映射模板见 [`assets.example.json`](assets.example.json)。
 
 ## Remotion 包装
 
@@ -61,7 +61,7 @@ video-understanding
 
 案例首选字体是 `Hannotate SC`（字幕）和 `Xingkai SC`（片名/花字），源码包含系统字体 fallback。不同平台字体指标会改变视觉结果，正式交付前应在目标机器抽检长字幕、亮背景、暗背景和人物近景。
 
-Agent 按 [`skill-runbook.md`](skill-runbook.md) 走到 `video-assemble` 的可选包装阶段后，才在该目录安装锁定依赖、渲染透明 PNG 序列并叠到音画锁定母版；音轨从母版 stream-copy，避免包装步骤意外改变音频。源码可单独检查和渲染，但它不是完整案例的旁路入口。
+Agent 按 [`skill-runbook.md`](skill-runbook.md) 走到 `video-assemble` 的可选包装阶段后，在该目录安装锁定依赖、渲染透明 PNG 序列并叠到音画锁定母版；音轨从母版 stream-copy，避免包装步骤意外改变音频。
 
 ## REVISION：最终接点修复
 
@@ -69,7 +69,7 @@ Agent 按 [`skill-runbook.md`](skill-runbook.md) 走到 `video-assemble` 的可�
 - **46.24 秒附近**：此前省略了原片 2001–2004 秒的同一运动镜头，形成明显的人工跳接；最终版恢复完整连续段并在旁白覆盖期统一提速。
 - **51.52 秒后**：继承已验证的画面和音频尾段，保护原声恢复区的 AV 同步。
 
-`revision-log.json` 记录每轮建议、修改项和冻结项，`edit-map.json` 说明看片确认的接点，`picture-conform.json` 描述最终接受的项目级再剪结果。这些项目级记录都不能替代 Skill 原生 `clip_plan` / `clip_plan_validated` 契约。
+`revision-log.json` 记录每轮建议、修改项和冻结项，`edit-map.json` 说明看片确认的接点，`picture-conform.json` 描述最终接受的项目级再剪结果；复现时仍由 Skill 生成 `clip_plan` / `clip_plan_validated`。
 
 这类问题不应沉淀成“某一秒特殊处理”的核心代码补丁。可复用规则是：检测工具负责指出候选边界，播放负责判定；同一源镜头被人工切断时，优先恢复源连续性；收到建议后只解冻相关层，再分别验证修改项和冻结项。
 
@@ -84,4 +84,4 @@ Agent 按 [`skill-runbook.md`](skill-runbook.md) 走到 `video-assemble` 的可�
 
 ## 版权与复现边界
 
-本目录只展示结构化创作产物和原创包装代码。复现完整成片需要 Agent 使用本仓库 Skills 读取合法素材与声音资源，并把逻辑素材 ID 映射到实际文件；本仓库不授予原剧、演员声音、音乐、音效或字体的任何权利。可还原范围和不能假装 bit-exact 的边界见 [`skill-runbook.md`](skill-runbook.md)。
+本目录只展示结构化创作产物和原创包装代码。复现完整成片需要 Agent 使用本仓库 Skills 读取合法素材与声音资源，并把逻辑素材 ID 映射到实际文件；本仓库不授予原剧、演员声音、音乐、音效或字体的任何权利。复现步骤与输入要求见 [`skill-runbook.md`](skill-runbook.md)。

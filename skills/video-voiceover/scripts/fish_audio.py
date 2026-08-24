@@ -40,7 +40,7 @@ def _fish_payload(text, rate="+0%"):
 
 
 def synthesize_fish_audio(text, output_path, rate="+0%", **_ignored):
-    """Synthesize one narration block and atomically write a mono WAV response."""
+    """Synthesize one narration block and atomically write the WAV response."""
     api_key = str(CONFIG.get("fish_api_key") or "").strip()
     if not api_key:
         raise RuntimeError("请设置 FISH_API_KEY 用于 Fish Audio TTS")

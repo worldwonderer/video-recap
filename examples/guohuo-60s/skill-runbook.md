@@ -1,6 +1,6 @@
 # 用仓库 Skills 复现这个案例
 
-这个 runbook 的执行者是 Agent，不是用户手动拼命令，也不是 example 自带的旁路脚本。目标是让另一个 Agent 使用仓库本身的 Skills，走出与案例相同的决策结构和可比效果。
+本 runbook 供 Agent 使用仓库 Skills 复现案例的决策结构与效果。
 
 ## 可复制的任务请求
 
@@ -66,7 +66,7 @@
 3. 渲染完整透明层并叠到锁定母版。
 4. 包装合成时 stream-copy 已通过的音频；复核字幕边界、片名安全区和花字信息增量。
 
-这一步是 `video-assemble` Skill 的可选包装路径；Remotion 只是本案例实现，不是第七个核心 Skill。
+这是 `video-assemble` Skill 的可选包装路径，Remotion 是本案例的实现。
 
 ### 6. REVISION：看片反馈后 conform / 再剪
 

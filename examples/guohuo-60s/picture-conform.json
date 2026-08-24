@@ -12,7 +12,7 @@
     "color_transfer": "bt709",
     "color_primaries": "bt709"
   },
-  "strategy": "Build the accepted picture directly from legal normalized sources. Do not recreate the rejected freeze or omitted movement and then patch them.",
+  "strategy": "Build the accepted picture from legal normalized sources while preserving continuous source movement.",
   "segments": [
     {
       "name": "b01_reveal",

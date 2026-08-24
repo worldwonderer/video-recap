@@ -29,8 +29,7 @@
         "sources/*/asr_writing_chunks.json",
         "sources/*/agent_narration_brief.md",
         "contact sheets and representative frames"
-      ],
-      "reason": "Derived source-media analysis is omitted from the public demo; the contract and source IDs remain visible."
+      ]
     },
     {
       "stage": "script_cut_pass_1",
@@ -48,7 +47,7 @@
         "clip_plan_validated.json",
         "edited_source.mp4"
       ],
-      "reason": "The released picture received project-level conform changes. Reproduction must generate a fresh Skill-native validated plan instead of treating project extensions as the core video-cut contract."
+      "reason": "Reproduction generates a fresh Skill-native validated plan; final picture changes are recorded in picture-conform.json."
     },
     {
       "stage": "script_cut_pass_2",
@@ -60,8 +59,7 @@
         "speech_boundary_anchors_output.json",
         "narration_lint.json",
         "deslop_qc.json"
-      ],
-      "reason": "Public artifacts keep the accepted narration and release evidence; drafting diagnostics are regenerated locally and are not part of the showcase."
+      ]
     },
     {
       "stage": "voiceover",
@@ -70,8 +68,7 @@
       "generated_but_not_distributed": [
         "tts_segments/*.wav",
         "tts_meta.json"
-      ],
-      "reason": "Generated audio and runtime-only voiceover metadata are not part of the public demo."
+      ]
     },
     {
       "stage": "assemble",
@@ -94,7 +91,7 @@
         "captions.json",
         "remotion/"
       ],
-      "note": "Runs only after the core picture and audio pass; Remotion is the project implementation of the optional packaging path described by video-assemble, not a replacement skill."
+      "note": "Optional transparent overlay after picture and audio lock."
     },
     {
       "stage": "revision_and_delivery",
@@ -105,21 +102,12 @@
         "delivery-qc.json",
         "content-qc.md"
       ],
-      "note": "The agent reads feedback as change/frozen/verification sets, performs project-level conform or recut, then re-watches. These records do not replace the core clip_plan contracts."
+      "note": "Project-level change, frozen, verification, conform, and delivery records."
     }
   ],
   "reproduction": {
     "entrypoint": "video-recap Skill",
     "runbook": "skill-runbook.md",
-    "asset_mapping_template": "assets.example.json",
-    "principle": "Re-run the skills against legal inputs; do not bypass them with an example-only rebuild script."
-  },
-  "public_redactions": [
-    "licensed media and derived frames",
-    "audio assets",
-    "absolute local paths",
-    "runtime-only voiceover metadata",
-    "validated-plan-bound speech evidence",
-    "drafting diagnostics"
-  ]
+    "asset_mapping_template": "assets.example.json"
+  }
 }
