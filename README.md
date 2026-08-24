@@ -84,20 +84,20 @@ export FISH_TTS_REFERENCE_ID=your-voice-model-id  # 可选；覆盖内置“娱�
 在 Claude Code 内执行：
 
 ```text
-/plugin marketplace add worldwonderer/video-recap-skills
+/plugin marketplace add zenstory-ai/video-recap-skills
 /plugin install video-recap-skills@video-recap
 ```
 
 也可以直接说：
 
 ```text
-安装这个插件：https://github.com/worldwonderer/video-recap-skills
+安装这个插件：https://github.com/zenstory-ai/video-recap-skills
 ```
 
 #### Codex CLI
 
 ```bash
-codex plugin marketplace add worldwonderer/video-recap-skills
+codex plugin marketplace add zenstory-ai/video-recap-skills
 codex plugin add video-recap-skills@video-recap
 ```
 
@@ -108,7 +108,7 @@ codex plugin add video-recap-skills@video-recap
 [OpenCode 官方 Agent Skills 文档](https://opencode.ai/docs/skills/)规定项目级技能放在 `.opencode/skills/<name>/SKILL.md`。克隆仓库后，从仓库目录启动 OpenCode：
 
 ```bash
-git clone https://github.com/worldwonderer/video-recap-skills.git
+git clone https://github.com/zenstory-ai/video-recap-skills.git
 cd video-recap-skills
 mkdir -p .opencode
 ln -s ../skills .opencode/skills             # macOS / Linux

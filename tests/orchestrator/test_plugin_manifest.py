@@ -93,7 +93,7 @@ def test_public_readmes_are_skill_first_and_document_verified_hosts():
     }
 
     for language, text in readmes.items():
-        assert "codex plugin marketplace add worldwonderer/video-recap-skills" in text, language
+        assert "codex plugin marketplace add zenstory-ai/video-recap-skills" in text, language
         assert "codex plugin add video-recap-skills@video-recap" in text, language
         assert "https://opencode.ai/docs/skills/" in text, language
         assert "opencode debug skill" in text, language
