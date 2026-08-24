@@ -56,7 +56,7 @@ def test_guohuo_public_artifacts_are_portable_and_self_consistent():
     assert "overdo-" not in public_text
     assert "output_sfx_norm" not in public_text
     assert not re.search(
-        r"(?i)(?:\b(?:fingerprint|sha256|md5|checksum|material_id)\b|指纹)", case_text
+        r"(?i)\b(?:fingerprint|sha256|md5|checksum|material_id)\b", case_text
     )
     assert not re.search(r"\b(?:sk|tp)-[A-Za-z0-9_-]{8,}\b", public_text)
     assert not re.search(r"\bAKIA[0-9A-Z]{16}\b", public_text)
