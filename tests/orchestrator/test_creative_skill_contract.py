@@ -155,6 +155,7 @@ def test_dense_scene_cut_policy_distinguishes_source_and_edit_created_cuts():
         assert "不能用来遮掩坏接点" in playbook
 
     cut_skill = _skill_path("video-cut").read_text(encoding="utf-8")
+    assert "select='gt(scene,0.35)',showinfo" in cut_skill
     assert "原片自带的无关短镜头整段删除" in cut_skill
     assert "由本次拼接制造的切点" in cut_skill
 

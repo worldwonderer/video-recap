@@ -401,7 +401,6 @@
       "source": {
         "present": true,
         "path": "MEDIA_NOT_DISTRIBUTED/visual_overlays.json",
-        "fingerprint": "bbb311ed6ec92748fa3ed6d7648446e42db8e42dde419fe58e83ca6a439d4615",
         "schema_version": 1
       },
       "load_error": null,
@@ -820,7 +819,6 @@
       "source": {
         "present": true,
         "path": "MEDIA_NOT_DISTRIBUTED/visual_overlays.json",
-        "fingerprint": "bbb311ed6ec92748fa3ed6d7648446e42db8e42dde419fe58e83ca6a439d4615",
         "schema_version": 1
       },
       "load_error": null,

@@ -2,7 +2,6 @@
   "schema_version": 2,
   "input_video": "MEDIA_NOT_DISTRIBUTED/edited_source.mp4",
   "source_video": null,
-  "source_video_fingerprint": null,
   "tts_meta": "MEDIA_NOT_DISTRIBUTED/tts_meta.json",
   "tts_segments": 7,
   "assembly_settings": {
@@ -29,8 +28,7 @@
       "subtitle_y_bot": -1,
       "visual_overlays": {
         "artifact": "visual_overlays.json",
-        "present": true,
-        "fingerprint": "bbb311ed6ec92748fa3ed6d7648446e42db8e42dde419fe58e83ca6a439d4615"
+        "present": true
       }
     },
     "narration_timing": {
@@ -258,7 +256,7 @@
       "peak_after": 0.311065673828125
     }
   ],
-  "final_output": "MEDIA_NOT_DISTRIBUTED/recap_这一秒过火_60s_横屏吃瓜版_v07_base.mp4",
+  "final_output": "MEDIA_NOT_DISTRIBUTED/core_assembly_master.mp4",
   "timeline_provenance": {
     "degraded": false
   }

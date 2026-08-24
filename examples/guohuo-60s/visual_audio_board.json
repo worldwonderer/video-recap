@@ -198,6 +198,6 @@
       ]
     }
   ],
-  "revision": "v47 final conform; clip_plan_validated.json remains the core cut-stage snapshot and edit-map.json records the later override.",
+  "revision": "Final picture conform is recorded in edit-map.json and picture-conform.json; reproduction generates a fresh Skill-native clip_plan_validated.json.",
   "control_mode": "REVISION"
 }

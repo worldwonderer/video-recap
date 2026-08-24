@@ -42,11 +42,11 @@
 
 ### 3. `video-cut`
 
-让 Skill 校验边界并生成新的 `clip_plan_validated.json` 和 `edited_source.mp4`。`scene-change score` 负责给候选，Agent 仍要真实播放每个接点。公开的 `clip_plan_validated.json` 是 v07 的核心 cut 快照，不是最终 v47 conform，也不应覆盖新运行的校验结果。
+让 Skill 校验边界并生成新的 `clip_plan_validated.json` 和 `edited_source.mp4`。`scene-change score` 负责给候选，Agent 仍要真实播放每个接点。公开案例不分发项目运行时的 validated plan；`picture-conform.json` 是后续项目级修订记录，不能覆盖新运行的 Skill 校验结果。
 
 ### 4. `video-script` pass 2 → `video-voiceover` → `video-assemble`
 
-按剪后输出时间线写 `narration.json`，再由 voiceover 生成当前 provider 的音频，由 assemble 放置、duck、生成字幕和母版。
+按剪后输出时间线写 `narration.json`，再由 voiceover 使用 Fish Audio 生成旁白，由 assemble 放置、duck、生成字幕和母版。复现时显式选择 `--tts-provider fish-audio`；公开案例的 TTS 来源只标记为 Fish Audio，运行时元数据不入库。
 
 复现的是内容和节奏契约，不是某个未分发声音的波形。若声音或语速不同：
 
@@ -78,8 +78,6 @@
 
 如果新素材、配音或切点改变了时间线，Agent 应保持修订意图，重新计算成片秒点；不要机械写死“42.08 秒 if”。这也是项目 example 与核心 Skill 规则的边界。
 
-## 可还原与不可假装还原
+## 复现范围
 
-在合法输入片源时间轴一致、配音时长接近、字体可用时，可以高度还原选段、叙事节奏、原声留白、字幕/片名/花字包装、后期 conform 和压缩结构。
-
-以下内容不随仓库分发，因此不能声称 bit-exact：版权视频与派生帧、旁白和原声、SFX 二进制、字体文件，以及历史 Dolby Vision → SDR 的具体色彩变换。缺少这些输入时，Skill 应显式重新校准，而不是伪造 PASS。
+在使用合法输入、保持片源时间轴一致并按目标环境重新校准声音与字体后，可以复现选段、叙事节奏、原声留白、字幕/片名/花字包装、后期 conform 和压缩结构。媒体与声音资源由复现者依法提供，仓库只负责 Skills 契约和公开创作产物。

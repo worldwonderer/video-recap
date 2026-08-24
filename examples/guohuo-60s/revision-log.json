@@ -3,7 +3,7 @@
   "control_mode": "REVISION",
   "rounds": [
     {
-      "baseline": "v07",
+      "baseline": "content_lock",
       "scope": "content_lock",
       "accepted": [
         "single relationship spine across multiple episodes",
@@ -19,13 +19,13 @@
         "audio mix"
       ],
       "evidence": [
-        "clip_plan_validated.json",
+        "clip_plan.json",
         "timeline.json",
         "assembly_qc.json"
       ]
     },
     {
-      "baseline": "v44",
+      "baseline": "packaging_direction",
       "scope": "packaging_direction",
       "change_set": [
         "add title mark, caption strip, and four sparse accent phrases on a transparent overlay"
@@ -43,7 +43,7 @@
       ]
     },
     {
-      "baseline": "v45-v46",
+      "baseline": "packaging_revision",
       "scope": "packaging_revision",
       "change_set": [
         "remove explanatory title labels and decorative clutter",
@@ -65,7 +65,7 @@
       ]
     },
     {
-      "baseline": "v47",
+      "baseline": "final_picture_conform",
       "scope": "picture_conform",
       "change_set": [
         "remove the visible tail-frame pause near 42.08 seconds",
@@ -81,7 +81,7 @@
         "normal-speed full watch",
         "join playback around both change points",
         "freeze detection as supporting evidence",
-        "audio packet MD5",
+        "audio stream-copy verification",
         "full decode"
       ]
     }

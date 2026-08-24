@@ -43,24 +43,29 @@
     },
     {
       "stage": "cut",
-      "included": [
-        "clip_plan_validated.json"
-      ],
+      "included": [],
       "generated_but_not_distributed": [
+        "clip_plan_validated.json",
         "edited_source.mp4"
-      ]
+      ],
+      "reason": "The released picture received project-level conform changes. Reproduction must generate a fresh Skill-native validated plan instead of treating project extensions as the core video-cut contract."
     },
     {
       "stage": "script_cut_pass_2",
       "included": [
         "narration.json",
-        "original_subtitles.json",
+        "original_subtitles.json"
+      ],
+      "generated_but_not_distributed": [
+        "speech_boundary_anchors_output.json",
         "narration_lint.json",
-        "speech_boundary_anchors_output.json"
-      ]
+        "deslop_qc.json"
+      ],
+      "reason": "Public artifacts keep the accepted narration and release evidence; drafting diagnostics are regenerated locally and are not part of the showcase."
     },
     {
       "stage": "voiceover",
+      "tts_provider": "Fish Audio",
       "included": [],
       "generated_but_not_distributed": [
         "tts_segments/*.wav",
@@ -113,11 +118,8 @@
     "licensed media and derived frames",
     "audio assets",
     "absolute local paths",
-    "runtime-only voiceover metadata"
-  ],
-  "validation_settings": {
-    "speech_rate_chars_per_second": 7.3,
-    "narration_speed": 1.15,
-    "basis": "Calibrated from the measured placed-audio durations in this finished project."
-  }
+    "runtime-only voiceover metadata",
+    "validated-plan-bound speech evidence",
+    "drafting diagnostics"
+  ]
 }

@@ -75,8 +75,16 @@ python3 scripts/cut.py <video> --work-dir <work_dir> \
 - 连续同源片段的无损连接不做句中双侧音频淡出；非连续片段仍在安全停顿内做防爆音淡入淡出。
 - 旧版旁白映射若跨越 clip 边界，不再裁短后继续：`clamped_beats` 永久阻断，`--allow-sparse-cut` 也不能绕过旁白句子完整性。
 
+需要检查短时间频繁切镜时，先用 ffmpeg scene filter 召回候选时间：
+
+```bash
+ffmpeg -i input.mp4 -vf "select='gt(scene,0.35)',showinfo" -an -f null -
+```
+
+`0.35` 是起始阈值，不是质量判据；大幅运动、闪白和叠化都可能误报。把候选映射回原片 shot 与本次拼接边界后，按上面的来源分类处理，并以正常速度播放决定是否保留。
+
 ## 7. 能力边界
 
-- 不重新转写或分析视频。
+- 不重新转写，也不做人物、剧情或情绪等语义理解；scene filter 只承担技术边界候选检测。
 - 不写旁白，也不替 Agent 选择片段；只消费 `clip_plan.json`。
-- 除拼接与时间映射所需处理外，不额外重编码。
+- 只做生成 `edited_source.mp4` 所需的剪切、拼接与一次中间编码，不承担字幕包装或最终交付压缩。

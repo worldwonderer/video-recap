@@ -75,8 +75,7 @@
   ],
   "audio": {
     "asset_id": "locked-prepackaging-master",
-    "codec_action": "stream_copy",
-    "stream_md5": "08826fc118a6a26385775c585e1cb4e3"
+    "codec_action": "stream_copy"
   },
   "overlay": {
     "asset_id": "remotion-overlay-sequence",

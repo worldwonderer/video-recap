@@ -23,21 +23,9 @@
       "purpose": "picture conform"
     }
   },
-  "audio_master": {
-    "path": "output_sfx_norm.mp4",
-    "purpose": "accepted video-assemble output after optional licensed SFX finishing; the packaging revision must preserve its audio stream"
-  },
-  "sfx": {
-    "whoosh_07": {
-      "path": "whoosh-07.mp3"
-    },
-    "cinematic_impact_hit": {
-      "path": "cinematic-impact-hit.mp3"
-    }
-  },
   "input_contract": {
     "source_timebase": "Paths must preserve the episode timecodes used by clip_plan.json and picture-conform.json.",
-    "video": "Pre-normalized SDR, square pixels, BT.709 primaries/transfer/matrix, limited range. The example does not guess a Dolby Vision to SDR transform.",
+    "video": "Pre-normalized SDR, square pixels, BT.709 primaries/transfer/matrix, limited range.",
     "audio": "48 kHz stereo is recommended. Licensed episode audio, narration, music, and effects are supplied by the user and are not distributed here."
   }
 }

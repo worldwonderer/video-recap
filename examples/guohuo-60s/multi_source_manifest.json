@@ -5,41 +5,31 @@
       "source_id": "episode-01",
       "source_path": "MEDIA_NOT_DISTRIBUTED/episode-01.mkv",
       "source_name": "episode-01.mkv",
-      "source_video_fingerprint": "f48cc8130e04471edf89e097c89eb38bb30d5007a006ed747c040fbff67f1c6d",
-      "source_work_dir": "sources/episode-01",
-      "material_id": "overdo-episode-01"
+      "source_work_dir": "sources/episode-01"
     },
     {
       "source_id": "episode-02",
       "source_path": "MEDIA_NOT_DISTRIBUTED/episode-02.mkv",
       "source_name": "episode-02.mkv",
-      "source_video_fingerprint": "523e9f24d56f46a75ec74ac29ce66487d575e8bad2d9bf8e7bffb3f82a369935",
-      "source_work_dir": "sources/episode-02",
-      "material_id": "overdo-episode-02"
+      "source_work_dir": "sources/episode-02"
     },
     {
       "source_id": "episode-03",
       "source_path": "MEDIA_NOT_DISTRIBUTED/episode-03.mkv",
       "source_name": "episode-03.mkv",
-      "source_video_fingerprint": "50b84a8e9a6b36bb1ff6fae8d967e458de034aeb9d7f409bc00aaa440b476f4d",
-      "source_work_dir": "sources/episode-03",
-      "material_id": "overdo-episode-03"
+      "source_work_dir": "sources/episode-03"
     },
     {
       "source_id": "episode-06",
       "source_path": "MEDIA_NOT_DISTRIBUTED/episode-06.mkv",
       "source_name": "episode-06.mkv",
-      "source_video_fingerprint": "137a18647556858dcf4b46c247915b7239419dc2982c97456003e987ec81e0c9",
-      "source_work_dir": "sources/episode-06",
-      "material_id": "overdo-episode-06"
+      "source_work_dir": "sources/episode-06"
     },
     {
       "source_id": "episode-21",
       "source_path": "MEDIA_NOT_DISTRIBUTED/episode-21.mkv",
       "source_name": "episode-21.mkv",
-      "source_video_fingerprint": "92833a841c961c72762ef758f0ba7acd077d43a691a7b49853fde7b7c2872a13",
-      "source_work_dir": "sources/episode-21",
-      "material_id": "overdo-episode-21"
+      "source_work_dir": "sources/episode-21"
     }
   ]
 }

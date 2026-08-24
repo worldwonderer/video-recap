@@ -3,7 +3,6 @@
   "verdict": "PASS",
   "video_url": "https://github.com/user-attachments/assets/f3c2df0c-6869-4f5b-8f4c-cce70b58b667",
   "repository_media_included": false,
-  "sha256": "fc1a4aee175f7d30fa32019acb2eef3549ff24bb96b6734996e5badafb964abb",
   "bytes": 9720072,
   "decimal_mb": 9.72,
   "mib": 9.27,
@@ -21,7 +20,6 @@
   "checks": {
     "full_decode": true,
     "audio_stream_matches_master": true,
-    "audio_stream_md5": "08826fc118a6a26385775c585e1cb4e3",
     "vmaf_mean": 93.844938,
     "ssim_all": 0.989302,
     "psnr_average_db": 45.415972
