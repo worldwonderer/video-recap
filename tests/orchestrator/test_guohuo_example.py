@@ -64,12 +64,18 @@ def test_guohuo_timeline_delivery_and_source_ids_agree():
     assert f"fps={{{media['fps']}}}" in composition
 
 
-def test_guohuo_narration_lint_is_reproducible(monkeypatch, tmp_path):
+def test_guohuo_narration_lint_is_reproducible(tmp_path):
     work_dir = tmp_path / "guohuo-60s"
     shutil.copytree(EXAMPLE, work_dir)
     expected = json.loads((work_dir / "narration_lint.json").read_text(encoding="utf-8"))
     env = os.environ.copy()
-    env.update({"SPEECH_RATE": "7.3", "NARRATION_SPEED": "1.15"})
+    env.update(
+        {
+            "SPEECH_RATE": "7.3",
+            "NARRATION_SPEED": "1.15",
+            "PYTHONIOENCODING": "utf-8",
+        }
+    )
 
     subprocess.run(
         [
