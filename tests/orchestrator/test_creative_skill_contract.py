@@ -140,6 +140,32 @@ def test_research_guides_match_their_own_stage_timing():
     assert "直接写解说词" not in script_guide
 
 
+def test_dense_scene_cut_policy_distinguishes_source_and_edit_created_cuts():
+    for skill_name in ("video-recap", "video-script"):
+        playbook = (
+            SKILLS_ROOT
+            / skill_name
+            / "references"
+            / "creative-editing-playbook.md"
+        ).read_text(encoding="utf-8")
+        assert "select='gt(scene,0.35)',showinfo" in playbook
+        assert "原片切点" in playbook
+        assert "本次剪辑制造的切点" in playbook
+        assert "多保留真实源素材" in playbook
+        assert "不能用来遮掩坏接点" in playbook
+
+    cut_skill = _skill_path("video-cut").read_text(encoding="utf-8")
+    assert "原片自带的无关短镜头整段删除" in cut_skill
+    assert "由本次拼接制造的切点" in cut_skill
+
+    for skill_name in ("video-understanding", "video-script"):
+        brief = (
+            SKILLS_ROOT / skill_name / "scripts" / "agent_brief.py"
+        ).read_text(encoding="utf-8")
+        assert "Inspect dense scene-change candidates" in brief
+        assert "restore same-source motion" in brief
+
+
 def test_deslop_qc_schema_keeps_template_transitions_advisory():
     marker = "模板化“不是……而是……”转折"
     for schema_path in (

@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "artifact": "speech_boundary_anchors_output.json",
+  "timeline": "cut_output",
+  "source_artifact": "multi_source_manifest.json",
+  "clip_plan_fingerprint": "96ec4d270f9e4291ced74afdcb5dc418",
+  "sentence_anchors": [
+    {
+      "time": 0.6,
+      "pause_start": 0.52,
+      "confidence": "high",
+      "text_tail": "[source text omitted from public demo]"
+    },
+    {
+      "time": 5.773,
+      "pause_start": 5.693,
+      "confidence": "high",
+      "text_tail": "[source text omitted from public demo]"
+    },
+    {
+      "time": 23.047,
+      "pause_start": 22.967,
+      "confidence": "high",
+      "text_tail": "[source text omitted from public demo]"
+    },
+    {
+      "time": 28.053,
+      "pause_start": 27.973,
+      "confidence": "high",
+      "text_tail": "[source text omitted from public demo]"
+    },
+    {
+      "time": 38.2,
+      "pause_start": 38.12,
+      "confidence": "high",
+      "text_tail": "[source text omitted from public demo]"
+    },
+    {
+      "time": 42.573,
+      "pause_start": 42.493,
+      "confidence": "high",
+      "text_tail": "[source text omitted from public demo]"
+    },
+    {
+      "time": 46.74,
+      "pause_start": 46.66,
+      "confidence": "high",
+      "text_tail": "[source text omitted from public demo]"
+    }
+  ],
+  "speech_spans": [
+    {
+      "start": 0.0,
+      "end": 58.96,
+      "text": "[source speech evidence omitted]"
+    }
+  ],
+  "quiet_windows": [],
+  "public_demo_note": "Raw ASR is not distributed. These verified output entry anchors are retained so the cut-output narration contract remains auditable."
+}

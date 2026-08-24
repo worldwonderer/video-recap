@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "edit_mode": "cut",
+  "control_modes": [
+    "DIRECTED",
+    "REVISION"
+  ],
+  "core_flow": [
+    "video-understanding",
+    "video-script",
+    "video-cut",
+    "video-script (cut pass 2)",
+    "video-voiceover",
+    "video-assemble"
+  ],
+  "stages": [
+    {
+      "stage": "research_and_understanding",
+      "included": [
+        "background_research.json",
+        "multi_source_manifest.json"
+      ],
+      "generated_but_not_distributed": [
+        "sources/*/scenes.json",
+        "sources/*/asr_result.json",
+        "sources/*/vlm_analysis.json",
+        "sources/*/silence_periods.json",
+        "sources/*/timeline_fusion.json",
+        "sources/*/asr_writing_chunks.json",
+        "sources/*/agent_narration_brief.md",
+        "contact sheets and representative frames"
+      ],
+      "reason": "Derived source-media analysis is omitted from the public demo; the contract and source IDs remain visible."
+    },
+    {
+      "stage": "script_cut_pass_1",
+      "included": [
+        "recap_story_plan.json",
+        "visual_audio_board.json",
+        "style_card.json",
+        "clip_plan.json"
+      ]
+    },
+    {
+      "stage": "cut",
+      "included": [
+        "clip_plan_validated.json"
+      ],
+      "generated_but_not_distributed": [
+        "edited_source.mp4"
+      ]
+    },
+    {
+      "stage": "script_cut_pass_2",
+      "included": [
+        "narration.json",
+        "original_subtitles.json",
+        "narration_lint.json",
+        "speech_boundary_anchors_output.json"
+      ]
+    },
+    {
+      "stage": "voiceover",
+      "included": [],
+      "generated_but_not_distributed": [
+        "tts_segments/*.wav",
+        "tts_meta.json"
+      ],
+      "reason": "Generated audio and runtime-only voiceover metadata are not part of the public demo."
+    },
+    {
+      "stage": "assemble",
+      "included": [
+        "timeline.json",
+        "assembly_manifest.json",
+        "assembly_qc.json"
+      ],
+      "generated_but_not_distributed": [
+        "_placed_*.wav",
+        "output.mp4",
+        "subtitles.srt",
+        "subtitles.ass"
+      ]
+    },
+    {
+      "stage": "optional_sound_and_packaging_exploration",
+      "included": [
+        "sfx_mix_plan.json",
+        "captions.json",
+        "remotion/"
+      ],
+      "note": "Runs only after the core picture and audio pass; Remotion is the project implementation of the optional packaging path described by video-assemble, not a replacement skill."
+    },
+    {
+      "stage": "revision_and_delivery",
+      "included": [
+        "revision-log.json",
+        "edit-map.json",
+        "picture-conform.json",
+        "delivery-qc.json",
+        "content-qc.md"
+      ],
+      "note": "The agent reads feedback as change/frozen/verification sets, performs project-level conform or recut, then re-watches. These records do not replace the core clip_plan contracts."
+    }
+  ],
+  "reproduction": {
+    "entrypoint": "video-recap Skill",
+    "runbook": "skill-runbook.md",
+    "asset_mapping_template": "assets.example.json",
+    "principle": "Re-run the skills against legal inputs; do not bypass them with an example-only rebuild script."
+  },
+  "public_redactions": [
+    "licensed media and derived frames",
+    "audio assets",
+    "absolute local paths",
+    "runtime-only voiceover metadata"
+  ],
+  "validation_settings": {
+    "speech_rate_chars_per_second": 7.3,
+    "narration_speed": 1.15,
+    "basis": "Calibrated from the measured placed-audio durations in this finished project."
+  }
+}

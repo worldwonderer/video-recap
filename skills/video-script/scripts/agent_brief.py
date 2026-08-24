@@ -255,6 +255,7 @@ def build_agent_brief(
                     "- Clip order is the story spine, not unordered highlights: you may use 0–1 optional cold-open/high-impact clip first, then return to the coherent main arc (setup → turn → payoff) and escalate to the ending.",
                     "- Use `reason` to preserve the actual edit decision: `beat_id | function | change | POV | preferred moment | 入点 | 出点`, not merely 'important plot'. Function is `cold_open`, `setup`, `turn`, `escalation`, or `payoff`.",
                     "- Clip length follows the moment. Vary pace; after any cold-open, order clips by causality so the cut reads as one coherent story, not a flat highlights reel.",
+                    "- Inspect dense scene-change candidates before locking boundaries. For source-authored cuts, delete irrelevant short shots and extend relevant shots to a complete action/reaction; for edit-created joins, move boundaries, restore same-source motion, or merge clips so the artificial cut disappears where possible. Do not hide a bad join with a transition.",
                     "- End a clip on a COMPLETE spoken line — set the clip end at or just after an ASR line-end (or inside the quiet window that follows it), never mid-sentence, so the original dialogue is never chopped off. Use the ASR [start–end] times + Quiet windows below as safe cut points; the CLI also snaps clip ends to the nearest line-end as a safety net.",
                     "",
                     "### clip_plan.json shape (original source timestamps)",

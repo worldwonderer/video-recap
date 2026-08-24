@@ -11,7 +11,11 @@
 
 ## Demo
 
-<video src="https://github.com/user-attachments/assets/aa96bd1d-ce4b-42bd-a7df-439aeb63dd18" width="640" controls></video>
+<video src="https://github.com/user-attachments/assets/f3c2df0c-6869-4f5b-8f4c-cce70b58b667" width="640" controls></video>
+
+[Explore the complete 60-second *Overdo* Skill project, Remotion overlay source, and content audit](examples/guohuo-60s/)
+
+The case study covers the core cut, picture/audio lock, packaging exploration, viewing feedback, scoped conform/re-cut, and frozen-set verification. It also demonstrates multi-episode selects, source-audio/narration ownership, TTS-aligned captions, and repairing distracting joins by restoring continuous source motion. No copyrighted episode footage, audio, or rendered video is stored in the repository.
 
 Beyond the rendered MP4, you can export a **剪映/JianYing draft** to keep editing by hand, with original clips, narration, BGM, and subtitles:
 

@@ -1,0 +1,30 @@
+{
+  "ok": true,
+  "contract": "Local readability/QC report only: this is not an AIGC detector, does not claim AI-generation accuracy, and never rewrites text. Corrections remain human/agent rewrite work.",
+  "scanner": "deslop_qc.py",
+  "style_card_required": false,
+  "style_card_requirement_source": "legacy_default",
+  "blocker_count": 0,
+  "advisory_count": 1,
+  "blockers": [],
+  "advisories": [
+    {
+      "severity": "advisory",
+      "code": "low_connective_density",
+      "source": "narration",
+      "index": null,
+      "message": "长文本缺少转折/因果连接，可能像平铺摘要",
+      "connective_count": 1
+    }
+  ],
+  "metrics": {
+    "segments_scanned": 10,
+    "text_units": 229,
+    "sentence_count": 11,
+    "cliche_count": 1,
+    "abstract_count": 0,
+    "reasoning_marker_count": 0,
+    "metaphor_marker_count": 0,
+    "connective_count": 1
+  }
+}

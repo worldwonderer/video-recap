@@ -11,7 +11,11 @@
 
 ## 演示
 
-<video src="https://github.com/user-attachments/assets/aa96bd1d-ce4b-42bd-a7df-439aeb63dd18" width="640" controls></video>
+<video src="https://github.com/user-attachments/assets/f3c2df0c-6869-4f5b-8f4c-cce70b58b667" width="640" controls></video>
+
+[查看《这一秒过火》60 秒解说的完整 Skill 工程、Remotion 包装源码与内容审核](examples/guohuo-60s/)
+
+该案例展示核心 cut、音画锁定、包装探索、看片反馈、局部 conform / 再剪与冻结项复核，也包含多集选段、原声/旁白分工、TTS 对齐字幕，以及通过恢复源镜头连续性修复难受接点。仓库不包含原剧、音频或视频二进制。
 
 成片之外，还能一键导出**剪映草稿**手动精修，原片、解说、BGM、字幕：
 

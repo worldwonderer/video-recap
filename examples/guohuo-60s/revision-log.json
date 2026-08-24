@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "control_mode": "REVISION",
+  "rounds": [
+    {
+      "baseline": "v07",
+      "scope": "content_lock",
+      "accepted": [
+        "single relationship spine across multiple episodes",
+        "three protected original-dialogue windows at 1.0x",
+        "picture-first narration entries",
+        "scene-clean EP06 boundary",
+        "longer kiss and reaction payoff"
+      ],
+      "frozen_after_round": [
+        "story spine",
+        "narration text and placed audio",
+        "protected original dialogue",
+        "audio mix"
+      ],
+      "evidence": [
+        "clip_plan_validated.json",
+        "timeline.json",
+        "assembly_qc.json"
+      ]
+    },
+    {
+      "baseline": "v44",
+      "scope": "packaging_direction",
+      "change_set": [
+        "add title mark, caption strip, and four sparse accent phrases on a transparent overlay"
+      ],
+      "frozen_set": [
+        "picture edit",
+        "narration",
+        "original dialogue",
+        "audio mix"
+      ],
+      "verification": [
+        "representative stills",
+        "full overlay render",
+        "audio stream copy"
+      ]
+    },
+    {
+      "baseline": "v45-v46",
+      "scope": "packaging_revision",
+      "change_set": [
+        "remove explanatory title labels and decorative clutter",
+        "move horizontal title into top letterbox",
+        "make accent phrases complement rather than repeat captions",
+        "align caption cues to placed audio",
+        "reduce caption-strip contrast and visual weight"
+      ],
+      "frozen_set": [
+        "picture edit",
+        "narration and TTS audio",
+        "original dialogue",
+        "audio mix"
+      ],
+      "verification": [
+        "long-caption, bright-frame, dark-frame, and close-up stills",
+        "caption-boundary frame review",
+        "audio stream copy"
+      ]
+    },
+    {
+      "baseline": "v47",
+      "scope": "picture_conform",
+      "change_set": [
+        "remove the visible tail-frame pause near 42.08 seconds",
+        "restore continuous source movement around 46.24 seconds"
+      ],
+      "frozen_set": [
+        "story and narration",
+        "all audio",
+        "caption timing and typography",
+        "title and accent graphics"
+      ],
+      "verification": [
+        "normal-speed full watch",
+        "join playback around both change points",
+        "freeze detection as supporting evidence",
+        "audio packet MD5",
+        "full decode"
+      ]
+    }
+  ]
+}
