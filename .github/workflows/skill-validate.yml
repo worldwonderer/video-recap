@@ -4,6 +4,9 @@ on:
   # here would let docs-only PRs stall forever under branch protection.
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     strategy:
