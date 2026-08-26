@@ -1,7 +1,12 @@
 # Changelog
 
-All notable changes to this project are documented here. This project adheres to
-[Semantic Versioning](https://semver.org/).
+All notable changes to this project are documented here.
+
+格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
+版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
+
+小节名统一使用 Keep a Changelog 的六个英文类别（`Added` / `Changed` / `Deprecated` /
+`Removed` / `Fixed` / `Security`），正文为中文。收紧到会拒绝旧输入的改动记入 `Changed`。
 
 ## [Unreleased]
 
@@ -264,3 +269,14 @@ recap feels like a recap, not captions over a clip.
 - Initial release: turn any video into a Chinese-narration recap on `ffmpeg` + one Xiaomi
   MiMo API key. Five independent skills (understanding, script, cut, voiceover, assemble)
   plus a thin orchestrator; optional 剪映 draft export.
+
+[Unreleased]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.3.3...v0.4.0
+[0.3.3]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.3.1...v0.3.2
+[0.3.0]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/zenstory-ai/video-recap-skills/releases/tag/v0.1.0
