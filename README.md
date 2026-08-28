@@ -7,15 +7,15 @@
 
 中文 · [English](README.en.md)
 
-**在 Claude Code、Codex CLI、OpenCode 或 OpenClaw 里，用一句自然语言把视频变成中文解说成片。** 本地只需要 Python、`ffmpeg` 和一个小米 MiMo API Key；TTS 也可切换到 Fish Audio。不用 GPU，不用下载模型，macOS / Linux / Windows 均可运行。
+**在 Claude Code、Codex CLI、OpenCode 或 OpenClaw 里，用一句自然语言把视频变成中文解说成片。** 本地只需要 Python、`ffmpeg` 和一个小米 MiMo API Key，其中 TTS 也可切换到 Fish Audio。不用 GPU，不用下载模型，macOS / Linux / Windows 均可运行。
 
 ## 演示
 
 <video src="https://github.com/user-attachments/assets/f3c2df0c-6869-4f5b-8f4c-cce70b58b667" width="640" controls></video>
 
-[查看《这一秒过火》60 秒解说的完整 Skill 工程、Remotion 包装源码与内容审核](examples/guohuo-60s/)
+[查看《这一秒过火》60 秒解说的完整 Skill 工程、Remotion 包装源码](examples/guohuo-60s/)
 
-该案例展示核心 cut、音画锁定、包装探索、看片反馈、局部 conform / 再剪与冻结项复核，也包含多集选段、原声/旁白分工、Fish Audio 配音与 TTS 对齐字幕，以及通过恢复源镜头连续性修复不自然接点。仓库不包含原剧、音频或视频二进制。
+该案例展示核心 cut、音画锁定、包装探索、看片反馈、二次剪辑，也包含多集选段、原声/旁白分工、Fish Audio 配音与 TTS 对齐字幕，以及通过恢复源镜头连续性修复不自然接点。
 
 成片之外，还能一键导出**剪映草稿**手动精修，原片、解说、BGM、字幕：
 
@@ -39,14 +39,14 @@ flowchart LR
 
 ## 为什么用它
 
-- **一个 key 跑全程。** ASR、VLM、TTS 全走[小米 MiMo](https://platform.xiaomimimo.com)；本地运行时只有 Python 标准库和 `ffmpeg`，不用 `pip install`。
-- **TTS 可切 Fish Audio。** `--tts-provider fish-audio` 即可使用 Fish Audio；当前 `s2.1-pro-free` 免费模型适合开发、试用和非 SLA 场景，保留原有 MiMo 默认路径。
+- **一个 key 跑全程。** ASR、VLM、TTS 均走[小米 MiMo](https://platform.xiaomimimo.com)；本地运行时只有 Python 标准库和 `ffmpeg`。
+- **TTS 可切 Fish Audio。** `--tts-provider fish-audio` 即可使用 Fish Audio；当前 `s2.1-pro-free` 免费模型适合开发、试用和非 SLA 场景，也保留 MiMo 默认路径。
 - **该查资料时先查。** 片名/剧情明确或 brief 提示素材偏薄时，把人物关系、剧情背景存进 `background_research.json`，VLM 才更容易认出谁是谁。
-- **先做创作决定，再分配声音。** Agent 先比较剪辑假设，锁定 POV、主线、具体画面与原声锚点；旁白有明确任务时才整块配音，强对白、动作声或沉默可以完整主导一个 beat。七三开只是在素材判断不足时的粗略回退，不是配额。
+- **先做创作决定，再分配声音。** Agent 先比较剪辑假设，锁定 POV、主线、具体画面与原声锚点；旁白有明确任务时才整块配音，强对白、动作声或沉默可以完整主导一个 beat。
 - **先剪后配，画面对齐。** 剪辑模式先把长视频剪成成片，再对着成片写解说，时间轴天然对齐。
-- **多视频也能剪，分析可复用。** 一次传多个视频，按 `source_id` 选段剪成一个成片；每个视频的分析沉淀为文件系统素材库，下次 `grep` 复用、不重算。
+- **多视频也能剪，分析可复用。** 一次传多个视频，按 `source_id` 选段剪成一个成片；每个视频的分析沉淀为文件系统素材库，下次可复用。
 - **能接着在剪映里改。** 可选导出 schema-driven 的多轨剪映草稿，原片、解说、BGM、字幕和本地图片叠层都可编辑；视频/音频/图片默认打包进 `Resources/local` 并建立素材索引，clone 或搬目录后仍可用。ffmpeg 仍是最终成片的判定标准。
-- **可选 MiMo 成片顾问，不当门神。** 需要时可让 MiMo 在合成前或成片后给出语义/审美建议；缺 key、限流、超时或模型输出异常都只提示，绝不阻断或自动改片。
+- **可选 MiMo 成片顾问。** 需要时可让 MiMo 在合成前或成片后给出语义/审美建议；缺 key、限流、超时或模型输出异常都只提示，不会阻断。
 
 ## 安装
 
@@ -54,10 +54,10 @@ flowchart LR
 
 - Python 3.10+
 - `PATH` 上可用的 `ffmpeg`；默认烧录字幕，因此需要带 libass / `subtitles` 滤镜
-- 一个[小米 MiMo](https://platform.xiaomimimo.com) API Key，驱动 ASR、VLM 和默认 TTS
+- 一个[小米 MiMo](https://platform.xiaomimimo.com) API Key，驱动 ASR、VLM 和 TTS
 
 ```bash
-brew install ffmpeg                         # macOS
+brew install ffmpeg                        # macOS
 sudo apt install ffmpeg                    # Debian / Ubuntu
 choco install ffmpeg                       # Windows，也可用 scoop / winget
 
@@ -72,10 +72,10 @@ Windows PowerShell 使用 `$env:MIMO_API_KEY="your-mimo-key"`。MiMo 不一定�
 ```bash
 export TTS_PROVIDER=fish-audio
 export FISH_API_KEY=your-fish-key
-export FISH_TTS_REFERENCE_ID=your-voice-model-id  # 可选；覆盖内置“娱乐扒妹”解说音色
+export FISH_TTS_REFERENCE_ID=your-voice-model-id  # 可选；内置了“娱乐扒妹”解说音色
 ```
 
-当前默认使用 `s2.1-pro-free` 和“娱乐扒妹”音色（reference ID：`5653cea4ac83480aaf2bf45406556185`）；设置 `FISH_TTS_REFERENCE_ID` 可覆盖默认音色。[Fish Audio 官方现行说明](https://fish.audio/blog/s2-1-pro-free-api/?articleLocale=en)为免费开放至 **2026-08-31**，受 Fair Use Policy 约束、无 SLA；之后请以官方政策为准。模型、音色、响度和字幕等高级配置见[配置手册](skills/video-recap/references/config-playbook.md)。
+当前默认使用 `s2.1-pro-free` 和“娱乐扒妹”音色（reference ID：`5653cea4ac83480aaf2bf45406556185`）；设置 `FISH_TTS_REFERENCE_ID` 可覆盖默认音色。[Fish Audio 官方现行说明](https://fish.audio/blog/s2-1-pro-free-api/?articleLocale=en)为免费开放至 **2026-08-31**。
 
 ### 2. 选择 Agent 宿主
 
@@ -100,8 +100,6 @@ export FISH_TTS_REFERENCE_ID=your-voice-model-id  # 可选；覆盖内置“娱�
 codex plugin marketplace add zenstory-ai/video-recap-skills
 codex plugin add video-recap-skills@video-recap
 ```
-
-本地仓库可把第一条命令的源换成目录路径。以上流程已使用隔离的 `CODEX_HOME` 在 Codex CLI `0.144.1` 完成安装烟测。
 
 #### OpenCode
 
