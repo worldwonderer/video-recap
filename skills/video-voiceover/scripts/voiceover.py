@@ -95,8 +95,7 @@ def _clean_narration_text(text):
     text = re.sub(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF'
                   r'\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0000FE00-\U0000FEFF]', '', text)
     # 清理多余空白
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 def _synthesize_segment(i, seg, narration, tts_dir, engine):
@@ -137,9 +136,8 @@ def _synthesize_segment(i, seg, narration, tts_dir, engine):
         dur = _get_audio_duration(output_wav)
     _write_tts_segment_cache(output_wav, cache_key, text, dur, rate_offset,
                              truncated, truncate_reason, norm_meta)
-    result = _build_tts_segment_result(
+    return _build_tts_segment_result(
         i, seg, text, output_wav, dur, rate_offset, truncated, truncate_reason, norm_meta)
-    return result
 
 
 def _build_tts_segment_result(index, seg, text, output_wav, duration, rate_offset,

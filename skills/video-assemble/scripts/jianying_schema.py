@@ -8,15 +8,7 @@ from jianying_templates import template
 
 # The full 剪映 materials object: ~45 parallel arrays. Only arrays backed by a
 # production builder are populated; retaining the full shape preserves compatibility.
-MATERIAL_KEYS = (
-    "ai_translates audio_balances audio_effects audio_fades audio_track_indexes audios "
-    "beats canvases chromas color_curves digital_humans drafts effects flowers green_screens "
-    "handwrites hsl images log_color_wheels loudnesses manual_deformations masks common_mask "
-    "material_animations material_colors multi_language_refs placeholders plugin_effects "
-    "primary_color_wheels realtime_denoises shapes smart_crops smart_relights "
-    "sound_channel_mappings speeds stickers tail_leaders text_templates texts time_marks "
-    "transitions video_effects video_trackings videos vocal_beautifys vocal_separations"
-).split()
+MATERIAL_KEYS = ["ai_translates", "audio_balances", "audio_effects", "audio_fades", "audio_track_indexes", "audios", "beats", "canvases", "chromas", "color_curves", "digital_humans", "drafts", "effects", "flowers", "green_screens", "handwrites", "hsl", "images", "log_color_wheels", "loudnesses", "manual_deformations", "masks", "common_mask", "material_animations", "material_colors", "multi_language_refs", "placeholders", "plugin_effects", "primary_color_wheels", "realtime_denoises", "shapes", "smart_crops", "smart_relights", "sound_channel_mappings", "speeds", "stickers", "tail_leaders", "text_templates", "texts", "time_marks", "transitions", "video_effects", "video_trackings", "videos", "vocal_beautifys", "vocal_separations"]
 
 
 def us(seconds):

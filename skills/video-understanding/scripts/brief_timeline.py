@@ -116,7 +116,7 @@ def _load_cut_output_spans_for_brief(work_dir, *, required=False):
                 "cut pass2 brief requires fresh clip_plan_validated.json with explicit "
                 f"finite source/output spans ({reason})"
             )
-        return None
+        return
 
     work_dir = Path(work_dir)
     if not (work_dir / "edited_source.mp4").exists():

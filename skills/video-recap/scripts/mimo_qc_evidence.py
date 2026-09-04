@@ -13,7 +13,8 @@ import os
 
 from pathlib import Path
 
-from typing import Any, Mapping, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 import qc_contract
 from mimo_qc_client import DEFAULT_CONFIG

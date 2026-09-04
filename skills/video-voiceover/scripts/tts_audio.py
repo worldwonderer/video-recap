@@ -64,8 +64,7 @@ def _normalize_tts_wav_rms(input_wav, output_wav, *, target_rms_dbfs=-20.0, peak
         value = max(-32768, min(32767, int(round(samples[i] * gain))))
         normalized[i] = value
         out_square_sum += value * value
-        if abs(value) > out_peak_raw:
-            out_peak_raw = abs(value)
+        out_peak_raw = max(out_peak_raw, abs(value))
     out_bytes = normalized
     if sys.byteorder != "little":
         out_bytes = array.array("h", normalized)

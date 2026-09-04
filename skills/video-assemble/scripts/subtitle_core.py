@@ -219,7 +219,7 @@ def _subtitle_entry_chunks(raw_chunks):
     """
     chunks = [str(c).strip() for c in (raw_chunks or []) if str(c).strip()]
     out = []
-    for i, chunk in enumerate(chunks):
+    for _i, chunk in enumerate(chunks):
         display = _subtitle_display_text(chunk)
         if not display:
             continue
@@ -239,8 +239,7 @@ def _normalize_subtitle_text(s):
     if not text:
         return text
     text = re.sub(r"—+", "，", text)
-    text = re.sub(r"，{2,}", "，", text)
-    return text
+    return re.sub(r"，{2,}", "，", text)
 
 
 def _split_subtitle_chunks(text, max_chars):

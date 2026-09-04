@@ -59,7 +59,7 @@ def _frame_fact_times_for_segment(scenes_analysis, start, end):
     scene = _find_scene_for_midpoint(scenes_analysis or [], start, end)
     if not scene:
         return times
-    for raw_ts in (scene.get("frame_facts") or {}).keys():
+    for raw_ts in (scene.get("frame_facts") or {}):
         try:
             ts = float(raw_ts)
         except (TypeError, ValueError):

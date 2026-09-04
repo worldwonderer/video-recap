@@ -102,10 +102,7 @@ def _split_text_by_sentence_windows(text, min_chars=500, max_chars=800):
                 if ch in sentence_marks:
                     outside = i
                     break
-            if outside >= 0 and outside + 1 <= len(rest):
-                cut = outside
-            else:
-                cut = char_max - 1
+            cut = outside if outside >= 0 and outside + 1 <= len(rest) else char_max - 1
         piece = rest[: cut + 1].strip()
         if not piece:
             piece = rest[:char_max].strip()
@@ -127,8 +124,7 @@ def _timed_sentence_pieces(seg, min_chars, max_chars):
         end = float(seg.get("end", start))
     except (TypeError, ValueError):
         start = end = 0.0
-    if end < start:
-        end = start
+    end = max(end, start)
     pieces = []
     for sentence in _sentence_pieces(text):
         if _writing_text_units(sentence) > max_chars:
@@ -400,8 +396,7 @@ def _normalise_narration_segment(seg, scenes_analysis=None):
 def _clean_narration_punctuation(text):
     text = re.sub(r"\s+", " ", text or "").strip()
     text = re.sub(r'[，：、；,]["\']?[。！？]', "。", text)
-    text = re.sub(r'["\']。$', "。", text)
-    return text
+    return re.sub(r'["\']。$', "。", text)
 
 
 def _overlap_seconds(start, end, other_start, other_end):

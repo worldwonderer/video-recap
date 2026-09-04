@@ -410,8 +410,7 @@ def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key
         try:
             req = urllib.request.Request(endpoint, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=300) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                return result
+                return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = _sanitize_api_error(e.read().decode("utf-8", errors="replace"))
             wait = min(2 ** attempt, 60)

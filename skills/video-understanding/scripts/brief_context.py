@@ -150,11 +150,7 @@ def _format_background_research(research, limit=1800):
     if len(text) <= limit:
         return lines
     clipped = text[:limit].rsplit("\n", 1)[0].rstrip()
-    return clipped.splitlines() + [
-        "",
-        "[Story context clipped to keep ASR/visual evidence in context]",
-        "",
-    ]
+    return [*clipped.splitlines(), "", "[Story context clipped to keep ASR/visual evidence in context]", ""]
 
 
 def assess_understanding_substrate(

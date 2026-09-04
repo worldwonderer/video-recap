@@ -9,7 +9,8 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 

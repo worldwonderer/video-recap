@@ -20,7 +20,8 @@ import tempfile
 
 from pathlib import Path
 
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
+from collections.abc import Callable, Mapping, Sequence
 
 import qc_contract
 

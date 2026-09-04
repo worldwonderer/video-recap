@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
 from jianying_schema import us
 from jianying_tracks import TrackAllocator

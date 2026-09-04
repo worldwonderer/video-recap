@@ -95,7 +95,7 @@ def _chars_per_second(text, room):
         if ch.isspace():
             continue
         cat = unicodedata.category(ch)
-        if cat.startswith("P") or cat.startswith("S"):
+        if cat.startswith(("P", "S")):
             continue
         effective += 1
     return effective / room
@@ -286,8 +286,7 @@ def _strip_reasoning_residue(text):
     """
     text = re.sub(r"(?is)<think\b.*?</think\s*>", "", text)  # full <think>…</think> block
     text = re.sub(r"(?is)<think\b.*\Z", "", text)            # unclosed/truncated <think tail
-    text = re.sub(r"(?i)^\s*<?/?think\s*>\s*", "", text)     # leading orphan/residual think tag
-    return text
+    return re.sub(r"(?i)^\s*<?/?think\s*>\s*", "", text)     # leading orphan/residual think tag
 
 
 def _run_asr(wav_path, lang="en"):
