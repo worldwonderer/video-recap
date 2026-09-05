@@ -1,11 +1,11 @@
-"""Cross-skill contract for the duplicated full-file fingerprint helpers.
+"""Cross-skill contract for the full-file fingerprint helpers.
 
-The bundle ships seven copies of the same sha256-over-content helper (each skill is
-self-contained by design). Nothing linked them, so a change to one could silently
-diverge — and cache provenance is compared ACROSS skills: video-cut writes
+Each independently shipped skill keeps the same sha256-over-content behavior. A change
+to one could silently diverge — and cache provenance is compared ACROSS skills: video-cut writes
 `edited_source.mp4.meta.json`, video-recap reads it, video-assemble fingerprints the
 same source again. A divergence there degrades into cache misses or, worse, false
-cache hits. These tests hold the copies to one behaviour.
+cache hits. These tests hold the implementations to one behaviour and ensure the recap
+orchestrator reuses its skill-local materials implementation instead of duplicating it.
 """
 import importlib.util
 import os
@@ -20,7 +20,6 @@ FINGERPRINT_IMPLEMENTATIONS = (
     ("skills/video-assemble/scripts/artifacts.py", "_file_fingerprint"),
     ("skills/video-cut/scripts/cut_contract.py", "file_fingerprint"),
     ("skills/video-recap/scripts/materials.py", "file_fingerprint"),
-    ("skills/video-recap/scripts/recap_runtime.py", "_file_fingerprint"),
     ("skills/video-script/scripts/lib.py", "file_fingerprint"),
     ("skills/video-understanding/scripts/lib.py", "file_fingerprint"),
     ("skills/video-voiceover/scripts/lib.py", "file_fingerprint"),
@@ -135,3 +134,30 @@ def test_memo_key_includes_size_and_mtime(implementations, tmp_path):
         identity = module._file_identity(target)
         stat = os.stat(target)
         assert identity == (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns), rel
+
+
+def test_recap_runtime_reuses_materials_fingerprint(monkeypatch, tmp_path):
+    runtime = _load("skills/video-recap/scripts/recap_runtime.py", "runtime")
+    assert not hasattr(runtime, "_file_fingerprint")
+
+    sample = tmp_path / "recap-source.bin"
+    sample.write_bytes(b"shared recap fingerprint")
+    monkeypatch.setattr(runtime.material_lib, "file_fingerprint", lambda path: f"shared:{path}")
+    assert runtime._run_manifest_payload(
+        sample,
+        type(
+            "Args",
+            (),
+            {
+                "context": None,
+                "scene_threshold": 0.3,
+                "style": None,
+                "edit_mode": "full",
+                "target_duration": None,
+                "skip_asr": False,
+                "mimo_video_overview": False,
+                "consolidate": False,
+                "consolidate_asr": False,
+            },
+        )(),
+    )["source_video_fingerprint"] == f"shared:{sample}"

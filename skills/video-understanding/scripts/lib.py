@@ -2,6 +2,7 @@
 Merged from the shared core; reads the same env vars as the rest of the bundle."""
 import json
 import hashlib
+import math
 import os
 import re
 import subprocess
@@ -50,22 +51,33 @@ def default_mimo_api_url(api_key="", cluster=None):
     if is_mimo_token_plan_key(api_key):
         cluster_name = (cluster or os.environ.get("MIMO_TOKEN_PLAN_CLUSTER") or DEFAULT_MIMO_TOKEN_PLAN_CLUSTER)
         cluster_name = str(cluster_name).strip().lower()
-        return MIMO_TOKEN_PLAN_API_URLS.get(cluster_name, MIMO_TOKEN_PLAN_API_URLS[DEFAULT_MIMO_TOKEN_PLAN_CLUSTER])
+        if cluster_name not in MIMO_TOKEN_PLAN_API_URLS:
+            raise ValueError(
+                f"MiMo token-plan cluster must be one of {sorted(MIMO_TOKEN_PLAN_API_URLS)}; "
+                f"got {cluster_name!r}"
+            )
+        return MIMO_TOKEN_PLAN_API_URLS[cluster_name]
     return DEFAULT_MIMO_API_URL
 
 
-def env_int(name, default, *, minimum=None):
-    """Read an integer env var; ignore malformed values instead of crashing import."""
+def _env_number(name, default, cast, minimum):
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
     try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
+        value = cast(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a {cast.__name__}; got {raw!r}") from exc
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must be finite; got {raw!r}")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}; got {value}")
     return value
+
+
+def env_int(name, default, *, minimum=None):
+    """Read an integer env var, rejecting malformed or below-minimum values."""
+    return _env_number(name, default, int, minimum)
 
 
 def env_bool(name, default=False):
@@ -77,17 +89,8 @@ def env_bool(name, default=False):
 
 
 def env_float(name, default, *, minimum=None):
-    """Read a float env var; ignore malformed values instead of crashing import."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
+    """Read a float env var, rejecting malformed or below-minimum values."""
+    return _env_number(name, default, float, minimum)
 
 
 # Single MiMo credential powers ASR + VLM + TTS. Per-capability overrides

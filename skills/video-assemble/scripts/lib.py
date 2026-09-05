@@ -1,4 +1,5 @@
 """Self-contained config + utilities for this skill (no cross-skill imports)."""
+import math
 import os
 import subprocess
 from pathlib import Path
@@ -7,85 +8,40 @@ from pathlib import Path
 # ── 配置 ──────────────────────────────────────────────────────────────
 _EXISTING_CONFIG_REF = globals().get("CONFIG")
 
-DEFAULT_MIMO_API_URL = "https://api.xiaomimimo.com/v1"
-DEFAULT_MIMO_TOKEN_PLAN_CLUSTER = "cn"
-MIMO_TOKEN_PLAN_API_URLS = {
-    "cn": "https://token-plan-cn.xiaomimimo.com/v1",
-    "sgp": "https://token-plan-sgp.xiaomimimo.com/v1",
-    "ams": "https://token-plan-ams.xiaomimimo.com/v1",
-}
-DEFAULT_MIMO_MODEL = "mimo-v2.5"          # VLM / chat (vision understanding)
-DEFAULT_MIMO_ASR_MODEL = "mimo-v2.5-asr"  # speech-to-text
-DEFAULT_MIMO_TTS_MODEL = "mimo-v2.5-tts"  # text-to-speech
-
-
-def normalize_api_url(raw_url):
-    """Normalize a MiMo (OpenAI-compatible) base URL or chat/completions endpoint."""
-    url = (raw_url or DEFAULT_MIMO_API_URL).rstrip("/")
-    if url.endswith("/chat/completions"):
-        return url
-    return f"{url}/chat/completions"
-
-
-def is_mimo_token_plan_key(api_key):
-    """Return True for Xiaomi MiMo Token Plan keys, which use token-plan base URLs."""
-    return str(api_key or "").strip().startswith("tp-")
-
-
-def default_mimo_api_url(api_key="", cluster=None):
-    """Pick the correct MiMo base URL for pay-as-you-go vs Token Plan keys.
-
-    MiMo uses independent credentials for pay-as-you-go (`sk-*`) and Token Plan
-    (`tp-*`). Token Plan keys must be sent to the Token Plan cluster base URL,
-    not the pay-as-you-go `api.xiaomimimo.com` endpoint.
-    """
-    if is_mimo_token_plan_key(api_key):
-        cluster_name = (cluster or os.environ.get("MIMO_TOKEN_PLAN_CLUSTER") or DEFAULT_MIMO_TOKEN_PLAN_CLUSTER)
-        cluster_name = str(cluster_name).strip().lower()
-        return MIMO_TOKEN_PLAN_API_URLS.get(cluster_name, MIMO_TOKEN_PLAN_API_URLS[DEFAULT_MIMO_TOKEN_PLAN_CLUSTER])
-    return DEFAULT_MIMO_API_URL
-
 
 def env_int(name, default, *, minimum=None):
-    """Read an integer env var; ignore malformed values instead of crashing import."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
+    """Read an integer env var; an unset/empty value yields `default`, a malformed one is an error."""
+    raw = os.environ.get(name, "")
+    if raw == "":
         return default
     try:
         value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
+    except ValueError as exc:
+        raise ValueError(f"环境变量 {name}={raw!r} 不是整数") from exc
+    return value if minimum is None else max(minimum, value)
 
 
 def env_bool(name, default=False):
     """Read common boolean env var forms."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
+    raw = os.environ.get(name, "")
+    if raw == "":
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def env_float(name, default, *, minimum=None):
-    """Read a float env var; ignore malformed values instead of crashing import."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
+    """Read a float env var; an unset/empty value yields `default`, a malformed one is an error."""
+    raw = os.environ.get(name, "")
+    if raw == "":
         return default
     try:
         value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
+    except ValueError as exc:
+        raise ValueError(f"环境变量 {name}={raw!r} 不是数字") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"环境变量 {name}={raw!r} 必须是有限数")
+    return value if minimum is None else max(minimum, value)
 
-
-# Single MiMo credential powers ASR + VLM + TTS. Per-capability overrides
-# (MIMO_VIDEO_API_KEY / MIMO_TTS_API_KEY / MIMO_ASR_API_KEY and their *_API_URL forms)
-# are optional and fall back to MIMO_API_KEY / MIMO_API_URL. Token-Plan keys (tp-*) auto-
-# route to the Token-Plan cluster base URL; pay-as-you-go keys use api.xiaomimimo.com.
 
 # Cross-language source: when the original audio is in a language the narration is NOT in
 # (e.g. a Japanese drama recapped in Chinese), the original speech bleeding under the narration
@@ -181,9 +137,8 @@ if isinstance(_EXISTING_CONFIG_REF, dict):
     CONFIG = _EXISTING_CONFIG_REF
 
 SCRIPT_DIR = Path(__file__).parent
-PROMPTS_DIR = SCRIPT_DIR.parent / "references"
 
-def narration_tempo_budget(tts_rate_offset=0.0, *, config=None):
+def narration_tempo_budget(tts_rate_offset=0.0):
     """Return the canonical tempo budget shared by voiceover and assemble.
 
     `effective_tempo` is the user-perceived cumulative compression:
@@ -192,13 +147,13 @@ def narration_tempo_budget(tts_rate_offset=0.0, *, config=None):
     offset; callers must fail/shorten instead of time-trimming speech when the
     needed ratio exceeds `segment_tempo_max`.
     """
-    cfg = config or CONFIG
-    global_speed = max(0.01, float(cfg.get("narration_speed", 1.0) or 1.0))
-    rate_factor = max(0.01, 1.0 + float(tts_rate_offset or 0.0))
-    cumulative_max = max(1.0, float(cfg.get("narration_cumulative_tempo_max", 1.35) or 1.35))
-    hard_max = max(cumulative_max, float(cfg.get("narration_cumulative_tempo_hard_max", 1.40) or 1.40))
-    legacy_segment_cap = max(1.0, float(cfg.get("tts_segment_tempo_max", 1.20) or 1.20))
-    segment_tempo_max = max(1.0, min(legacy_segment_cap, cumulative_max / (global_speed * rate_factor)))
+    global_speed = CONFIG["narration_speed"]
+    rate_factor = max(0.01, 1.0 + float(tts_rate_offset))
+    cumulative_max = CONFIG["narration_cumulative_tempo_max"]
+    hard_max = max(cumulative_max, CONFIG["narration_cumulative_tempo_hard_max"])
+    segment_tempo_max = max(1.0, min(
+        CONFIG["tts_segment_tempo_max"], cumulative_max / (global_speed * rate_factor)
+    ))
     return {
         "global_narration_speed": global_speed,
         "tts_rate_factor": rate_factor,
@@ -213,16 +168,10 @@ def log(msg):
 
 def run_cmd(cmd, **kwargs):
     """运行命令，返回 CompletedProcess"""
-    if isinstance(cmd, list):
-        display_parts = []
-        for part in cmd:
-            text = str(part)
-            display_parts.append(text if len(text) <= 240 else text[:237] + "...")
-        display = " ".join(display_parts)
-    else:
-        display = str(cmd)
-        if len(display) > 2000:
-            display = display[:1997] + "..."
+    display = " ".join(
+        text if len(text) <= 240 else text[:237] + "..."
+        for text in map(str, cmd)
+    )
     log(f"运行: {display}")
     return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
 
@@ -232,8 +181,5 @@ def get_video_duration(video_path):
            "-of", "csv=p=0", str(video_path)]
     result = run_cmd(cmd)
     if result.returncode != 0:
-        return 0.0
-    try:
-        return float(result.stdout.strip())
-    except (TypeError, ValueError):
-        return 0.0
+        raise RuntimeError(f"ffprobe 无法读取时长 {video_path}: {result.stderr}")
+    return float(result.stdout.strip())

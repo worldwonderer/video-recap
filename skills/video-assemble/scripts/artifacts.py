@@ -59,7 +59,7 @@ def _explicit_source_video():
     """Return the cut-mode source video only when the caller opted in explicitly."""
     if not CONFIG.get("source_video_explicit", False):
         return ""
-    return str(CONFIG.get("source_video", "") or "").strip()
+    return CONFIG["source_video"]
 
 
 def _source_video_identity():
@@ -72,17 +72,12 @@ def _source_video_identity():
 
 def _timeline_provenance_status(work_dir):
     data = _load_work_json(work_dir, "timeline.json")
-    if not isinstance(data, dict):
-        return None
-    provenance = data.get("provenance")
-    return provenance if isinstance(provenance, dict) else None
+    return None if data is None else data["provenance"]
 
 
 def _load_work_json(work_dir, name):
+    """Parse a JSON artifact in work_dir; None only when the file does not exist."""
     path = Path(work_dir) / name
     if not path.exists():
         return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return None
+    return json.loads(path.read_text(encoding="utf-8"))

@@ -10,6 +10,18 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Changed
+
+- **技能脚本改为在边界校验一次，之后信任契约。** 各 skill 内部大量 `.get(key, default)`、`isinstance(...)` 兜底与 `try/except` 被移除：由本 skill 自己写出的产物（`tts_meta.json`、`timeline.json`、`clip_plan_validated.json`、QC 报告等）按字段直接读取，`CONFIG[...]` 直接取键。校验集中在真正的输入边界：`narration_lint.py` 是 agent 手写 `narration.json` 的唯一校验器，`jianying_timeline_contract.py` 是剪映时间线的唯一校验器。
+- **配置与探测失败改为显式报错。** `env_int` / `env_float` / `env_bool` 遇到无法解析的环境变量不再静默回退默认值；`ffprobe` 读不出时长或视频流时抛错，不再退回 `0.0` 或 1280x720 默认画布——错误的画布会静默产出错位的字幕几何。
+- **剪映资源契约收敛为规范 snake_case 对象。** `resources` 条目必须是带 `source_path` 的对象（不再接受裸字符串），`main_config` 必须是对象（不再接受 JSON 字符串或文件路径），不再接受 Jackson 的 `mainConfig` / `resourceId` / `coverImg` 别名，也不再按 `.cube` / `.ttf` 后缀推断 `resource_kind`。外部输入请在调用本 skill 前完成适配。
+- **`MIMO_TOKEN_PLAN_CLUSTER` 取值非法时报错**，不再静默回退到 `cn` 集群。
+
+### Fixed
+
+- **`narration.json` 的 `visual_overlays` 现在会被 lint 校验。** 此前它是唯一没有校验器覆盖的 agent 手写字段：缺 `type` / `text` 的 overlay 能通过 lint，却让 recap 编排器在 TTS 跑完之后才以 `KeyError` 崩溃。校验前移到 TTS 之前，崩溃变成可读的 lint error。
+- **静音 TTS 块不再中断配音。** 零帧 WAV 会原样透传并返回中性的响度元数据，不再因除以零样本数而抛 `ZeroDivisionError`。
+
 ## [0.4.0] - 2026-07-27
 
 汇总 `v0.3.3` 之后的全部工作：多源剪辑、QC、字幕与配音改进，可携带剪映草稿能力，内容驱动的创作流程，以及一轮深度审查带来的正确性、性能与配置面修复。

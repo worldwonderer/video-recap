@@ -89,9 +89,9 @@ DUB_ARTIFACT_SCHEMAS = {
 
 
 def _chars_per_second(text, room):
-    room = max(float(room or 0.0), 0.001)
+    room = max(room, 0.001)
     effective = 0
-    for ch in str(text or ""):
+    for ch in text:
         if ch.isspace():
             continue
         cat = unicodedata.category(ch)
@@ -104,15 +104,13 @@ def _chars_per_second(text, room):
 def _issue(severity, code, line, message, start=None, end=None):
     item = {"severity": severity, "code": code, "line": line, "message": message}
     if start is not None:
-        item["start"] = round(float(start), 3)
+        item["start"] = round(start, 3)
     if end is not None:
-        item["end"] = round(float(end), 3)
+        item["end"] = round(end, 3)
     return item
 
 
 def _normalize_dub_script(script):
-    if not isinstance(script, list):
-        raise ValueError("dub_script.json must be a list")
     lines = []
     for i, item in enumerate(script):
         if not isinstance(item, dict):
@@ -212,10 +210,7 @@ def build_dub_review(script, transcript, lint=None):
     """Script-level review scaffold: deterministic timing/naturalness signals for agent review."""
     duration = float(transcript.get("duration", 0.0))
     lint = lint or lint_dub_script(script, duration)
-    try:
-        lines = _normalize_dub_script(script)
-    except ValueError:
-        lines = []  # non-list script already FAILs lint; review is just a scaffold here
+    lines = _normalize_dub_script(script) if isinstance(script, list) else []
     edits = []
     for issue in lint.get("issues", []):
         if issue["severity"] in {"error", "warning"}:

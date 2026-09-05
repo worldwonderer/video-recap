@@ -11,7 +11,6 @@ from recap_runtime import (
     _build_multi_source_records,
     _coerce_videos,
     _entry,
-    _file_fingerprint,
     _material_settings_fingerprint,
     _optional_env_int,
     _preflight_burn_subtitles,
@@ -59,7 +58,7 @@ RUN_MANIFEST = "recap_run_manifest.json"
 def _voiceover_args(work_dir, narration_path, args):
     """Build the shared full/cut invocation for video-voiceover."""
     result = ["--work-dir", str(work_dir), "--narration", str(narration_path)]
-    if getattr(args, "tts_provider", "auto") != "auto":
+    if args.tts_provider != "auto":
         result += ["--tts-provider", args.tts_provider]
     if args.mimo_tts_voice:
         result += ["--mimo-voice", args.mimo_tts_voice]
@@ -75,25 +74,23 @@ def _run_or_restore_understanding(source_record, source_work_dir, args):
     source_work_dir = Path(source_work_dir)
     source_work_dir.mkdir(parents=True, exist_ok=True)
     source_fp = source_record["source_video_fingerprint"]
-    settings_fp = source_record.get(
-        "settings_fingerprint"
-    ) or _material_settings_fingerprint(args)
+    settings_fp = source_record["settings_fingerprint"]
     lib_dir = _material_library_dir(args)
     restored = False
-    if lib_dir and _materials_enabled(args):
+    if _materials_enabled(args):
         result = material_lib.restore_material(
             lib_dir,
             source_work_dir,
             source_fingerprint=source_fp,
             settings_fp=settings_fp,
         )
-        restored = bool(result.get("restored"))
+        restored = result["restored"]
         if restored:
             print(
-                f"[video-recap] ♻️  复用素材库: {result.get('material_id')} → {source_work_dir}",
+                f"[video-recap] ♻️  复用素材库: {result['material_id']} → {source_work_dir}",
                 flush=True,
             )
-        elif result.get("reason"):
+        else:
             print(
                 f"[video-recap] 素材库未复用 {source_record['source_name']}: {result['reason']}",
                 flush=True,
@@ -107,19 +104,19 @@ def _run_or_restore_understanding(source_record, source_work_dir, args):
         )
 
     _write_run_manifest(source_work_dir, source_record["source_path"], args)
-    if lib_dir and _save_materials_enabled(args):
+    if _save_materials_enabled(args):
         meta = material_lib.save_material(
             lib_dir,
             source_work_dir,
             source_record["source_path"],
             source_fp,
             settings_fp,
-            source_id=source_record.get("source_id"),
-            material_id=source_record.get("material_id"),
+            source_id=source_record["source_id"],
+            material_id=source_record["material_id"],
         )
-        source_record["material_id"] = meta.get("material_id")
+        source_record["material_id"] = meta["material_id"]
         print(
-            f"[video-recap] 💾 已沉淀素材: {meta.get('material_id')} → {lib_dir}",
+            f"[video-recap] 💾 已沉淀素材: {meta['material_id']} → {lib_dir}",
             flush=True,
         )
     return restored
@@ -127,7 +124,7 @@ def _run_or_restore_understanding(source_record, source_work_dir, args):
 
 def _single_source_record(video, args):
     """Identity + settings for the one source of a single-video run."""
-    fp = _file_fingerprint(video)
+    fp = material_lib.file_fingerprint(video)
     return {
         "source_id": material_lib.source_id_from_fingerprint(fp),
         "source_path": str(video),
@@ -209,9 +206,9 @@ def _run_multi_cut(videos, work_dir, args):
     ]
     if args.target_duration:
         crender += ["--target-duration", args.target_duration]
-    if getattr(args, "allow_duration_drift", False):
+    if args.allow_duration_drift:
         crender.append("--allow-duration-drift")
-    if getattr(args, "allow_sparse_cut", False):
+    if args.allow_sparse_cut:
         crender.append("--allow-sparse-cut")
     _run("video-cut", "cut.py", *crender)
     cut_qc = _surface_cut_qc(work_dir)
@@ -301,10 +298,7 @@ def _run_multi_cut(videos, work_dir, args):
         aargs.append("--jianying-no-bundle-media")
     _run("video-assemble", "assemble.py", *aargs)
 
-    final_dir = Path(args.output_dir) if args.output_dir else work_dir.parent
-    final_output = _read_assembly_output(work_dir) or (
-        final_dir / ("recap_" + recap_stem + ".mp4")
-    )
+    final_output = _read_assembly_output(work_dir)
     _write_shift_left_stage_qc(
         work_dir,
         "post_render",
@@ -325,7 +319,7 @@ def main():
         ap.error(
             "MIMO_QC/--mimo-qc must be one of: off, pre-assemble, post-render, both"
         )
-    if getattr(args, "tts_provider", "auto") not in TTS_PROVIDERS:
+    if args.tts_provider not in TTS_PROVIDERS:
         ap.error(
             "TTS_PROVIDER/--tts-provider must be one of: auto, mimo-tts, fish-audio"
         )
@@ -354,9 +348,7 @@ def main():
     )
     if explicit_mimo_voice and args.voice_ref:
         ap.error("--mimo-tts-voice and --voice-ref are mutually exclusive")
-    if getattr(args, "tts_provider", "auto") == "fish-audio" and (
-        explicit_mimo_voice or args.voice_ref
-    ):
+    if args.tts_provider == "fish-audio" and (explicit_mimo_voice or args.voice_ref):
         ap.error(
             "--mimo-tts-voice/--voice-ref are only supported by --tts-provider mimo-tts"
         )
@@ -532,9 +524,9 @@ def main():
         crender = [str(video), "--work-dir", str(work_dir), "--no-narration-map"]
         if args.target_duration:
             crender += ["--target-duration", args.target_duration]
-        if getattr(args, "allow_duration_drift", False):
+        if args.allow_duration_drift:
             crender.append("--allow-duration-drift")
-        if getattr(args, "allow_sparse_cut", False):
+        if args.allow_sparse_cut:
             crender.append("--allow-sparse-cut")
         _run("video-cut", "cut.py", *crender)
         cut_qc = _surface_cut_qc(work_dir)
@@ -638,10 +630,7 @@ def main():
         aargs.append("--jianying-no-bundle-media")
     _run("video-assemble", "assemble.py", *aargs)
 
-    final_dir = Path(args.output_dir) if args.output_dir else work_dir.parent
-    final_output = _read_assembly_output(work_dir) or (
-        final_dir / ("recap_" + video.stem + ".mp4")
-    )
+    final_output = _read_assembly_output(work_dir)
     _write_shift_left_stage_qc(
         work_dir,
         "post_render",

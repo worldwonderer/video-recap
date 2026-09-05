@@ -2,15 +2,15 @@
 
 import hashlib
 import json
-import math
 import os
 import shlex
 import sys
 from pathlib import Path
+
+from lib import load_json
 from recap_runtime import (
     _coerce_videos,
     _entry,
-    _load_json,
     _load_run_manifest,
     _multi_run_manifest_payload,
     _run_manifest_payload,
@@ -44,87 +44,43 @@ _ALLOWED_VISUAL_OVERLAY_TYPES = {"top_title", "inline_label_or_callout"}
 _VISUAL_OVERLAYS = "visual_overlays.json"
 
 
-def _finite_number(value):
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+def _canonical_visual_overlay(overlay, segment):
+    """Return the first-release assemble overlay contract, or None for unsupported types.
 
-
-def _iter_narration_segments(narration_data):
-    if isinstance(narration_data, list):
-        yield from (item for item in narration_data if isinstance(item, dict))
-        return
-    if not isinstance(narration_data, dict):
-        return
-    for key in ("segments", "narration", "items"):
-        value = narration_data.get(key)
-        if isinstance(value, list):
-            yield from (item for item in value if isinstance(item, dict))
-            return
-
-
-def _canonical_visual_overlay(overlay, segment=None):
-    """Return the first-release assemble overlay contract, or None.
-
-    Recap owns the handoff artifact but does not invent richer overlay semantics. Only the
-    two overlay types implemented by assemble are allowed through; all unknown platform or
-    future types stay out of the canonical first-release file.
+    Recap owns the handoff artifact but does not invent richer overlay semantics: only the
+    two overlay types implemented by assemble pass through, an overlay without its own
+    start/end inherits the narration segment's, and renderer placement hints are preserved.
     """
-    if not isinstance(overlay, dict):
+    if overlay["type"] not in _ALLOWED_VISUAL_OVERLAY_TYPES:
         return None
-    typ = overlay.get("type")
-    if typ not in _ALLOWED_VISUAL_OVERLAY_TYPES:
-        return None
-    text = overlay.get("text")
-    if text is None or str(text) == "":
-        return None
-    seg = segment if isinstance(segment, dict) else {}
-    start = _finite_number(overlay.get("start"))
-    end = _finite_number(overlay.get("end"))
-    if start is None:
-        start = _finite_number(seg.get("start"))
-    if end is None:
-        end = _finite_number(seg.get("end"))
-    if start is None or end is None or end <= start:
-        return None
-
-    item = {"type": typ, "text": str(text), "start": start, "end": end}
-    # Preserve renderer-supported placement hints supplied by upstream facts; do not add new
-    # semantic overlay kinds or infer platform-specific cards/chapters.
+    item = {
+        "type": overlay["type"],
+        "text": overlay["text"],
+        "start": overlay.get("start", segment["start"]),
+        "end": overlay.get("end", segment["end"]),
+    }
     for key in ("anchor", "x", "y", "max_width", "style"):
         if key in overlay:
             item[key] = overlay[key]
     return item
 
 
-def _extract_visual_overlays_from_narration(narration_path):
-    data = _load_json(narration_path)
-    overlays = []
-    for segment in _iter_narration_segments(data):
-        raw = segment.get("visual_overlays")
-        if not isinstance(raw, list):
-            continue
-        for overlay in raw:
-            item = _canonical_visual_overlay(overlay, segment)
-            if item is not None:
-                overlays.append(item)
-    return overlays
-
-
 def _write_canonical_visual_overlays(work_dir, narration_path):
     """Write assemble's canonical work_dir/visual_overlays.json recap handoff.
 
     Direct assemble still supports user-authored/manual visual_overlays.json files. Once
-    recap owns the handoff for a narration, however, the canonical artifact must be a
-    deterministic reflection of the current narration so reused work_dirs cannot render
-    stale overlays from a previous run. Unsupported/future overlay types are filtered out
-    and represented as an explicit empty overlay list.
+    recap owns the handoff for a narration, the canonical artifact is a deterministic
+    reflection of the current narration so reused work_dirs cannot render stale overlays
+    from a previous run; unsupported types are filtered out and represented as an explicit
+    empty overlay list.
     """
-    work_dir = Path(work_dir)
-    path = work_dir / _VISUAL_OVERLAYS
-    overlays = _extract_visual_overlays_from_narration(narration_path)
+    path = Path(work_dir) / _VISUAL_OVERLAYS
+    overlays = [
+        item
+        for segment in load_json(narration_path)
+        for overlay in segment.get("visual_overlays", [])
+        if (item := _canonical_visual_overlay(overlay, segment)) is not None
+    ]
     payload = {"schema_version": 1, "overlays": overlays}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[video-recap] 🧩 visual overlays: {len(overlays)} → {path}", flush=True)
@@ -135,18 +91,14 @@ def _print_grounding_qc_pointer(work_dir):
     qc_path = Path(work_dir) / "grounding_qc.json"
     if not qc_path.exists():
         return
-    data = _load_json(qc_path)
-    if isinstance(data, dict):
-        verdict = data.get("verdict", "unknown")
-        ranges = (data.get("review_coverage") or {}).get("time_ranges") or []
-        warnings = data.get("warnings") or []
-        suffix = f" · warnings {len(warnings)}" if warnings else ""
-        print(
-            f"[video-recap] 🧭 Grounding QC: {verdict} · ranges {len(ranges)}{suffix} → {qc_path}",
-            flush=True,
-        )
-    else:
-        print(f"[video-recap] 🧭 Grounding QC → {qc_path}", flush=True)
+    data = load_json(qc_path)
+    ranges = data["review_coverage"]["time_ranges"]
+    warnings = data["warnings"]
+    suffix = f" · warnings {len(warnings)}" if warnings else ""
+    print(
+        f"[video-recap] 🧭 Grounding QC: {data['verdict']} · ranges {len(ranges)}{suffix} → {qc_path}",
+        flush=True,
+    )
 
 
 def _print_narration_review_pointer(work_dir, *, review_ran=True):
@@ -161,17 +113,20 @@ def _print_narration_review_pointer(work_dir, *, review_ran=True):
     review_md = Path(work_dir) / "narration_review.md"
     if not review_md.exists():
         return
-    data = _load_json(Path(work_dir) / "narration_review.json")
-    if isinstance(data, dict):
-        findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
-        n_err = sum(1 for f in findings if f.get("severity") == "error")
-        tag = str(data.get("verdict") or "见文件")
-        print(
-            f"[video-recap] 📋 解说评审（建议性，不拦截）: {tag} · "
-            f"{len(findings)} 条意见（error {n_err}）→ {review_md}"
-        )
-    else:
-        print(f"[video-recap] 📋 解说评审意见 → {review_md}")
+    review_json = Path(work_dir) / "narration_review.json"
+    if not review_json.exists():
+        print(f"[video-recap] 📋 解说评审（建议性，不拦截）→ {review_md}")
+        return
+    try:
+        data = load_json(review_json)
+    except (OSError, ValueError):
+        print(f"[video-recap] 📋 解说评审（建议性，不拦截）→ {review_md}")
+        return
+    n_err = sum(1 for f in data["findings"] if f["severity"] == "error")
+    print(
+        f"[video-recap] 📋 解说评审（建议性，不拦截）: {data['verdict']} · "
+        f"{len(data['findings'])} 条意见（error {n_err}）→ {review_md}"
+    )
 
 
 def _settings_for_compare(settings):
@@ -182,7 +137,7 @@ def _settings_for_compare(settings):
     old default (or missing the key entirely, pre-dating it) must still resume — otherwise
     flipping `--consolidate`'s default ON would hard-fail every in-flight work_dir.
     """
-    s = dict(settings or {})
+    s = dict(settings)
     s.pop("consolidate", None)
     s.pop("consolidate_asr", None)
     return s
@@ -191,19 +146,16 @@ def _settings_for_compare(settings):
 def _manifest_mismatches(work_dir, video, args):
     expected = _run_manifest_payload(video, args)
     actual = _load_run_manifest(work_dir)
-    if not actual:
-        return [
-            "缺少或无法读取 recap_run_manifest.json；不能证明 work_dir 属于当前视频/参数"
-        ]
-    mismatches = []
-    for key in ("source_video", "source_video_fingerprint"):
-        if actual.get(key) != expected.get(key):
-            mismatches.append(
-                f"{key}: expected {expected.get(key)!r}, got {actual.get(key)!r}"
-            )
-    if _settings_for_compare(actual.get("settings")) != _settings_for_compare(
-        expected.get("settings")
-    ):
+    if actual is None:
+        return ["缺少 recap_run_manifest.json；不能证明 work_dir 属于当前视频/参数"]
+    # A multi-source manifest carries `sources` instead of these keys, so .get() reports it
+    # as a mismatch rather than a crash.
+    mismatches = [
+        f"{key}: expected {expected[key]!r}, got {actual.get(key)!r}"
+        for key in ("source_video", "source_video_fingerprint")
+        if actual.get(key) != expected[key]
+    ]
+    if _settings_for_compare(actual["settings"]) != _settings_for_compare(expected["settings"]):
         mismatches.append("settings: 当前 CLI/env 参数与 Phase A manifest 不匹配")
     return mismatches
 
@@ -211,51 +163,29 @@ def _manifest_mismatches(work_dir, video, args):
 def _multi_manifest_mismatches(work_dir, videos, args, source_records):
     expected = _multi_run_manifest_payload(videos, args, source_records)
     actual = _load_run_manifest(work_dir)
-    if not actual:
-        return [
-            "缺少或无法读取 recap_run_manifest.json；不能证明 work_dir 属于当前多视频/参数"
-        ]
-    mismatches = []
+    if actual is None:
+        return ["缺少 recap_run_manifest.json；不能证明 work_dir 属于当前多视频/参数"]
     if actual.get("mode") != "multi_source":
-        mismatches.append(f"mode: expected 'multi_source', got {actual.get('mode')!r}")
-    expected_sources = [
-        {
-            "source_id": s.get("source_id"),
-            "source_path": s.get("source_path"),
-            "source_video_fingerprint": s.get("source_video_fingerprint"),
-        }
-        for s in expected.get("sources", [])
-    ]
-    actual_sources = [
-        {
-            "source_id": s.get("source_id"),
-            "source_path": s.get("source_path"),
-            "source_video_fingerprint": s.get("source_video_fingerprint"),
-        }
-        for s in actual.get("sources", [])
-        if isinstance(s, dict)
-    ]
-    if actual_sources != expected_sources:
+        return [f"mode: expected 'multi_source', got {actual.get('mode')!r}"]
+    mismatches = []
+    identity = ("source_id", "source_path", "source_video_fingerprint")
+    if [{k: s[k] for k in identity} for s in actual["sources"]] != [
+        {k: s[k] for k in identity} for s in expected["sources"]
+    ]:
         mismatches.append(
             "sources: 当前输入视频列表/顺序/source_id/fingerprint 与 Phase A manifest 不匹配"
         )
-    if _settings_for_compare(actual.get("settings")) != _settings_for_compare(
-        expected.get("settings")
-    ):
+    if _settings_for_compare(actual["settings"]) != _settings_for_compare(expected["settings"]):
         mismatches.append("settings: 当前 CLI/env 参数与 Phase A manifest 不匹配")
     return mismatches
 
 
 def _read_assembly_output(work_dir):
-    manifest = _load_json(Path(work_dir) / ASSEMBLY_MANIFEST)
-    if isinstance(manifest, dict) and manifest.get("final_output"):
-        return Path(manifest["final_output"])
-    return None
+    return Path(load_json(Path(work_dir) / ASSEMBLY_MANIFEST)["final_output"])
 
 
 def _file_md5(path):
-    path = Path(path)
-    return hashlib.md5(path.read_bytes()).hexdigest() if path.exists() else None
+    return hashlib.md5(Path(path).read_bytes()).hexdigest()
 
 
 def _read_phase_ledger(work_dir):
@@ -264,9 +194,10 @@ def _read_phase_ledger(work_dir):
     Lets resume be driven by recorded phase state rather than bare file existence — the
     prerequisite for the cut-first/narrate-second two-pause flow, and the guard that keeps a
     narration written for one clip_plan from silently driving a different cut into TTS.
+    None before the first cut pass has recorded anything.
     """
-    ledger = _load_json(Path(work_dir) / PHASE_LEDGER)
-    return ledger if isinstance(ledger, dict) else None
+    path = Path(work_dir) / PHASE_LEDGER
+    return load_json(path) if path.exists() else None
 
 
 def _write_phase_ledger(work_dir, **fields):
@@ -282,18 +213,14 @@ def _cut_narration_is_stale(ledger, current_clip_plan_fp):
     """Two-pass cut: the narration is authored against the rendered cut shown at the A2 pause,
     i.e. against the clip_plan recorded in the ledger. If clip_plan changed since (a re-cut)
     while that narration is still present, it describes the OLD cut — stale."""
-    if not ledger:
-        return False
-    recorded_cp = ledger.get("clip_plan_fingerprint")
-    return bool(recorded_cp is not None and recorded_cp != current_clip_plan_fp)
+    return ledger is not None and ledger["clip_plan_fingerprint"] != current_clip_plan_fp
 
 
 def _continuation_command(video, work_dir, args):
-    videos = _coerce_videos(video)
     parts = [
         sys.executable,
         str(_entry("video-recap", "recap.py")),
-        *[str(v) for v in videos],
+        *[str(v) for v in _coerce_videos(video)],
         "--work-dir",
         str(work_dir),
     ]
@@ -307,58 +234,53 @@ def _continuation_command(video, work_dir, args):
         parts += ["--edit-mode", args.edit_mode]
     if args.target_duration:
         parts += ["--target-duration", args.target_duration]
-    if getattr(args, "allow_duration_drift", False):
+    if args.allow_duration_drift:
         parts.append("--allow-duration-drift")
-    if getattr(args, "allow_sparse_cut", False):
+    if args.allow_sparse_cut:
         parts.append("--allow-sparse-cut")
     if args.skip_asr:
         parts.append("--skip-asr")
     if args.mimo_video_overview:
         parts.append("--mimo-video-overview")
-    mimo_mode = getattr(args, "mimo_qc", "off")
-    if mimo_mode != "off":
-        parts += ["--mimo-qc", mimo_mode]
-    if getattr(args, "mimo_qc_refresh", False):
+    if args.mimo_qc != "off":
+        parts += ["--mimo-qc", args.mimo_qc]
+    if args.mimo_qc_refresh:
         parts.append("--mimo-qc-refresh")
-    if not args.consolidate:  # default is ON now; only the opt-out needs to round-trip
+    if not args.consolidate:  # default is ON; only the opt-out needs to round-trip
         parts.append("--no-consolidate")
     if args.consolidate_asr:
         parts.append("--consolidate-asr")
-    if getattr(args, "mimo_tts_voice", None):
+    if args.mimo_tts_voice:
         parts += ["--mimo-tts-voice", args.mimo_tts_voice]
-    if getattr(args, "tts_provider", "auto") != "auto":
+    if args.tts_provider != "auto":
         parts += ["--tts-provider", args.tts_provider]
-    if getattr(args, "voice_ref", None):
+    if args.voice_ref:
         parts += ["--voice-ref", args.voice_ref]
-    if getattr(args, "allow_partial_tts", False):
+    if args.allow_partial_tts:
         parts.append("--allow-partial-tts")
-    if getattr(args, "burn_subtitles", None) is not None:
-        parts.append(
-            "--burn-subtitles" if args.burn_subtitles else "--no-burn-subtitles"
-        )
-    if getattr(args, "subtitle_y_top", None) is not None:
+    if args.burn_subtitles is not None:
+        parts.append("--burn-subtitles" if args.burn_subtitles else "--no-burn-subtitles")
+    if args.subtitle_y_top is not None:
         parts += ["--subtitle-y-top", str(args.subtitle_y_top)]
-    if getattr(args, "subtitle_y_bot", None) is not None:
+    if args.subtitle_y_bot is not None:
         parts += ["--subtitle-y-bot", str(args.subtitle_y_bot)]
-    if getattr(args, "output_dir", None):
+    if args.output_dir:
         parts += ["--output-dir", args.output_dir]
-    if getattr(args, "export_jianying", False):
+    if args.export_jianying:
         parts.append("--export-jianying")
-    if getattr(args, "jianying_bundle_media", False):
+    if args.jianying_bundle_media:
         parts.append("--jianying-bundle-media")
-    if getattr(args, "jianying_no_bundle_media", False):
+    if args.jianying_no_bundle_media:
         parts.append("--jianying-no-bundle-media")
-    if getattr(args, "review_narration", None) is not None:
-        parts.append(
-            "--review-narration" if args.review_narration else "--no-review-narration"
-        )
-    if getattr(args, "require_narration_review", False):
+    if args.review_narration is not None:
+        parts.append("--review-narration" if args.review_narration else "--no-review-narration")
+    if args.require_narration_review:
         parts.append("--require-narration-review")
-    if getattr(args, "material_library_dir", None):
+    if args.material_library_dir:
         parts += ["--material-library-dir", args.material_library_dir]
-    if getattr(args, "use_materials", False):
+    if args.use_materials:
         parts.append("--use-materials")
-    if getattr(args, "save_materials", False):
+    if args.save_materials:
         parts.append("--save-materials")
     return " ".join(shlex.quote(part) for part in parts)
 
@@ -374,13 +296,13 @@ def _understand_args_for_source(source_record, source_work_dir, args):
         str(source_work_dir),
         "--style",
         args.style,
+        "--edit-mode",
+        args.edit_mode,
     ]
     if args.context:
         uargs += ["--context", args.context]
     if args.scene_threshold is not None:
         uargs += ["--scene-threshold", str(args.scene_threshold)]
-    if args.edit_mode:
-        uargs += ["--edit-mode", args.edit_mode]
     if args.target_duration:
         uargs += ["--target-duration", args.target_duration]
     if args.skip_asr:
@@ -394,16 +316,10 @@ def _understand_args_for_source(source_record, source_work_dir, args):
 
 
 def _brief_excerpt(path, limit=1200):
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    if limit <= 0:
-        return ""
+    text = Path(path).read_text(encoding="utf-8")
     if len(text) <= limit:
         return text
-    if limit < 8:
-        return text[:limit]
+    marker = "\n…\n"
 
     def section(heading):
         lines = text.splitlines()
@@ -412,11 +328,7 @@ def _brief_excerpt(path, limit=1200):
         except ValueError:
             return ""
         end = next(
-            (
-                index
-                for index in range(start + 1, len(lines))
-                if lines[index].startswith("## ")
-            ),
+            (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
             len(lines),
         )
         return "\n".join(lines[start:end]).strip()
@@ -424,37 +336,29 @@ def _brief_excerpt(path, limit=1200):
     def clipped(value, budget):
         if len(value) <= budget:
             return value
-        marker = "\n…\n"
-        if budget <= len(marker) + 1:
-            return value[:budget]
-        usable = max(0, budget - len(marker))
-        head = max(1, round(usable * 0.7))
-        tail = max(0, usable - head)
-        suffix = value[-tail:].lstrip() if tail else ""
-        return value[:head].rstrip() + marker + suffix
+        usable = budget - len(marker)
+        head = round(usable * 0.7)
+        return value[:head].rstrip() + marker + value[len(value) - (usable - head):].lstrip()
 
     # The generic writing contract occupies the front of every generated brief. A raw
     # prefix therefore drops the source facts that multi-source planning actually needs.
     # Give evidence-bearing sections equal space and retain both their opening and tail.
     preferred = [
-        section("## Story context (from background_research.json)"),
-        section("## Understanding index (from consolidate.py)"),
-        section("## ASR writing chunks (semantic windows)"),
-        section("## Scene timing guide"),
+        value
+        for value in (
+            section("## Story context (from background_research.json)"),
+            section("## Understanding index (from consolidate.py)"),
+            section("## ASR writing chunks (semantic windows)"),
+            section("## Scene timing guide"),
+        )
+        if value
     ]
-    preferred = [value for value in preferred if value]
     if preferred:
-        separators = 2 * (len(preferred) - 1)
-        per_section = max(1, (limit - separators) // len(preferred))
-        excerpt = "\n\n".join(clipped(value, per_section) for value in preferred)
-        return excerpt[:limit]
-
-    marker = "\n…\n"
-    usable = max(0, limit - len(marker))
-    head = max(1, usable // 4)
-    tail = max(0, usable - head)
-    suffix = text[-tail:].lstrip() if tail else ""
-    return text[:head].rstrip() + marker + suffix
+        per_section = (limit - 2 * (len(preferred) - 1)) // len(preferred)
+        return "\n\n".join(clipped(value, per_section) for value in preferred)[:limit]
+    usable = limit - len(marker)
+    head = usable // 4
+    return text[:head].rstrip() + marker + text[len(text) - (usable - head):].lstrip()
 
 
 def _write_multi_source_clip_brief(work_dir, source_records, args):
@@ -495,7 +399,7 @@ def _write_multi_source_clip_brief(work_dir, source_records, args):
             f"- path: `{s['source_path']}`",
             f"- work_dir: `{swd}`",
             f"- fingerprint: `{s['source_video_fingerprint']}`",
-            f"- material_id: `{s.get('material_id')}`",
+            f"- material_id: `{s['material_id']}`",
         ]
         excerpt = _brief_excerpt(swd / "agent_narration_brief.md")
         if excerpt:
@@ -505,89 +409,71 @@ def _write_multi_source_clip_brief(work_dir, source_records, args):
     )
 
 
+def _source_speech_rows(source_dir):
+    """The cleaned transcript wins when it carries text; same precedence as
+    audio_mix._handoff_speech_evidence and sentence_boundaries._load_source_speech_spans."""
+    clean = source_dir / "asr_clean.json"
+    if clean.exists():
+        rows = load_json(clean)["segments"]
+        if any(row["text"].strip() for row in rows):
+            return rows
+    raw = source_dir / "asr_result.json"
+    return load_json(raw) if raw.exists() else []
+
+
 def _write_multi_source_output_speech_evidence(work_dir, source_records, plan):
     """Map each source's speech and quiet evidence onto the combined output clock."""
-    clips = plan.get("clips", []) if isinstance(plan, dict) else []
-    source_by_id = {str(row["source_id"]): row for row in source_records}
+    source_by_id = {row["source_id"]: row for row in source_records}
     cache = {}
 
     def load_source(source_id):
-        if source_id in cache:
-            return cache[source_id]
-        record = source_by_id.get(source_id)
-        source_dir = _source_work_dir(work_dir, record) if record else None
-        anchors = _load_json(source_dir / "speech_boundary_anchors.json") if source_dir else None
-        speech = None
-        # Same precedence as audio_mix._handoff_speech_evidence and
-        # sentence_boundaries._load_source_speech_spans: the cleaned transcript wins.
-        # Reading these in the opposite order made the multi-source output timeline
-        # derive its speech spans from a different artifact than every other consumer.
-        for name in ("asr_clean.json", "asr_result.json"):
-            speech = _load_json(source_dir / name) if source_dir else None
-            rows = speech.get("segments", []) if isinstance(speech, dict) else speech
-            if isinstance(rows, list) and any(
-                isinstance(row, dict) and str(row.get("text") or "").strip()
-                for row in rows
-            ):
-                break
-        if isinstance(speech, dict):
-            speech = speech.get("segments", [])
-        quiet = _load_json(source_dir / "silence_periods.json") if source_dir else None
-        cache[source_id] = (
-            anchors.get("sentence_anchors", []) if isinstance(anchors, dict) else [],
-            speech if isinstance(speech, list) else [],
-            quiet if isinstance(quiet, list) else [],
-        )
+        if source_id not in cache:
+            source_dir = _source_work_dir(work_dir, source_by_id[source_id])
+            anchors_path = source_dir / "speech_boundary_anchors.json"
+            quiet_path = source_dir / "silence_periods.json"
+            cache[source_id] = (
+                load_json(anchors_path)["sentence_anchors"] if anchors_path.exists() else [],
+                _source_speech_rows(source_dir),
+                load_json(quiet_path) if quiet_path.exists() else [],
+            )
         return cache[source_id]
 
     mapped_anchors, mapped_speech, mapped_quiet = [], [], []
-    for clip in clips:
-        source_id = str(clip.get("source_id") or "")
-        try:
-            source_start = float(clip["source_start"])
-            source_end = float(clip["source_end"])
-            output_start = float(clip["output_start"])
-        except (KeyError, TypeError, ValueError):
-            continue
+    for clip in plan["clips"]:
+        source_id = clip["source_id"]
+        source_start = float(clip["source_start"])
+        source_end = float(clip["source_end"])
+        output_start = float(clip["output_start"])
         anchors, speech_rows, quiet_rows = load_source(source_id)
         for anchor in anchors:
-            try:
-                when = float(anchor.get("time"))
-            except (AttributeError, TypeError, ValueError):
+            when = float(anchor["time"])
+            if not (source_start - 0.05 <= when <= source_end + 0.05):
                 continue
-            if source_start - 0.05 <= when <= source_end + 0.05:
-                item = dict(anchor)
-                try:
-                    pause = float(item.get("pause_start", when))
-                except (TypeError, ValueError):
-                    pause = when
-                if not math.isfinite(pause):
-                    pause = when
-                pause = max(source_start, min(pause, when))
-                item.update(
-                    source_id=source_id,
-                    source_time=round(when, 3),
-                    time=round(output_start + when - source_start, 3),
-                    source_pause_start=round(pause, 3),
-                    pause_start=round(output_start + pause - source_start, 3),
-                )
-                mapped_anchors.append(item)
+            try:
+                pause = float(anchor["pause_start"])
+            except (TypeError, ValueError):
+                pause = when
+            pause = max(source_start, min(pause, when))
+            item = dict(anchor)
+            item.update(
+                source_id=source_id,
+                source_time=round(when, 3),
+                time=round(output_start + when - source_start, 3),
+                source_pause_start=round(pause, 3),
+                pause_start=round(output_start + pause - source_start, 3),
+            )
+            mapped_anchors.append(item)
         for rows, destination, require_text in (
             (speech_rows, mapped_speech, True),
             (quiet_rows, mapped_quiet, False),
         ):
             for row in rows:
-                if not isinstance(row, dict):
+                if require_text and not row["text"].strip():
                     continue
-                if require_text and not str(row.get("text") or "").strip():
+                if not require_text and row["has_speech"]:
                     continue
-                if not require_text and bool(row.get("has_speech", False)):
-                    continue
-                try:
-                    start = max(source_start, float(row["start"]))
-                    end = min(source_end, float(row["end"]))
-                except (KeyError, TypeError, ValueError):
-                    continue
+                start = max(source_start, float(row["start"]))
+                end = min(source_end, float(row["end"]))
                 if end <= start:
                     continue
                 item = dict(row)
@@ -610,7 +496,7 @@ def _write_multi_source_output_speech_evidence(work_dir, source_records, plan):
                 plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
             ).encode("utf-8")
         ).hexdigest(),
-        "sentence_anchors": sorted(mapped_anchors, key=lambda row: float(row["time"])),
+        "sentence_anchors": sorted(mapped_anchors, key=lambda row: row["time"]),
         "speech_spans": sorted(mapped_speech, key=lambda row: (row["start"], row["end"])),
         "quiet_windows": sorted(mapped_quiet, key=lambda row: (row["start"], row["end"])),
     }
@@ -621,8 +507,7 @@ def _write_multi_source_output_speech_evidence(work_dir, source_records, plan):
 
 
 def _write_multi_source_output_brief(work_dir, source_records, validated_plan_path):
-    plan = _load_json(validated_plan_path)
-    clips = plan.get("clips", []) if isinstance(plan, dict) else []
+    plan = load_json(validated_plan_path)
     source_by_id = {s["source_id"]: s for s in source_records}
     speech_evidence = _write_multi_source_output_speech_evidence(
         work_dir, source_records, plan
@@ -652,22 +537,21 @@ def _write_multi_source_output_brief(work_dir, source_records, validated_plan_pa
         "",
         "## Kept clips (output → source)",
     ]
-    for c in clips:
-        sid = c.get("source_id")
-        src = source_by_id.get(sid, {})
+    for c in plan["clips"]:
+        src = source_by_id[c["source_id"]]
+        reason = f" — {c['reason']}" if c["reason"] else ""
         lines.append(
-            f"- output {_fmt_range(c.get('output_start'), c.get('output_end'))} → "
-            f"{sid} `{src.get('source_path', c.get('source_path', ''))}` "
-            f"source {_fmt_range(c.get('source_start'), c.get('source_end'))} "
-            f"{('— ' + str(c.get('reason'))) if c.get('reason') else ''}"
+            f"- output {_fmt_range(c['output_start'], c['output_end'])} → "
+            f"{c['source_id']} `{src['source_path']}` "
+            f"source {_fmt_range(c['source_start'], c['source_end'])}{reason}"
         )
     anchors = speech_evidence["sentence_anchors"]
     if anchors:
         lines += ["", "## 原声句末安全切入点"]
         lines.extend(
-            f"- {float(row['time']):.3f}s ({row.get('source_id')})"
+            f"- {row['time']:.3f}s ({row['source_id']})"
             for row in anchors
-            if row.get("confidence") in {"high", "medium"}
+            if row["confidence"] in {"high", "medium"}
         )
     lines += ["", "## Source work dirs"]
     for s in source_records:
@@ -677,97 +561,34 @@ def _write_multi_source_output_brief(work_dir, source_records, validated_plan_pa
     )
 
 
-def _qc_status_is_blocking(value):
-    if isinstance(value, str):
-        return value.strip().lower() in {
-            "blocking",
-            "blocked",
-            "fail",
-            "failed",
-            "error",
-        }
-    return bool(value) if isinstance(value, bool) else False
-
-
-def _cut_qc_blocking_reasons(qc):
-    if not isinstance(qc, dict):
-        return []
-    reasons = []
-    for key in (
-        "status",
-        "target_duration_status",
-        "duration_status",
-        "boundary_status",
-    ):
-        if _qc_status_is_blocking(qc.get(key)):
-            reasons.append(f"{key}={qc.get(key)}")
-    for key in ("blocking", "blocked", "failed", "fail", "errors"):
-        value = qc.get(key)
-        if value:
-            reasons.append(f"{key}={value}")
-    checks = qc.get("checks") if isinstance(qc.get("checks"), list) else []
-    for item in checks:
-        if isinstance(item, dict) and _qc_status_is_blocking(item.get("status")):
-            reasons.append(f"{item.get('name', 'check')}={item.get('status')}")
-    return reasons
-
-
-def _cut_qc_summary_lines(qc):
-    if not isinstance(qc, dict) or not qc:
-        return []
-    parts = []
-    for key in (
-        "target_duration_status",
-        "total_duration",
-        "clip_count",
-        "join_fade_ms",
-    ):
-        if key in qc:
-            parts.append(f"{key}={qc.get(key)}")
-    geometry = qc.get("output_geometry")
-    if isinstance(geometry, dict):
-        dims = "x".join(
-            str(geometry.get(k))
-            for k in ("width", "height")
-            if geometry.get(k) is not None
-        )
-        fps = geometry.get("fps")
-        reason = geometry.get("reason") or qc.get("output_geometry_reason")
-        fps_suffix = f"@{fps}fps" if fps else ""
-        reason_suffix = f" reason={reason}" if reason else ""
-        parts.append(f"output_geometry={dims or geometry}{fps_suffix}{reason_suffix}")
-    warnings = qc.get("warnings")
-    if warnings:
-        parts.append(
-            f"warnings={len(warnings) if isinstance(warnings, list) else warnings}"
-        )
-    return ["[video-recap] cut QC: " + "; ".join(parts)] if parts else []
+def _cut_qc_summary_line(qc):
+    geometry = qc["output_geometry"]
+    parts = [
+        f"target_duration_status={qc['target_duration_status']}",
+        f"total_duration={qc['total_duration']}",
+        f"clip_count={qc['clip_count']}",
+        f"join_fade_ms={qc['join_fade_ms']}",
+        f"output_geometry={geometry['width']}x{geometry['height']}@{geometry['fps']}fps"
+        f" reason={qc['output_geometry_reason']}",
+    ]
+    if qc.get("warnings"):
+        parts.append(f"warnings={len(qc['warnings'])}")
+    return "[video-recap] cut QC: " + "; ".join(parts)
 
 
 def _surface_cut_qc(work_dir):
-    plan = _load_json(Path(work_dir) / "clip_plan_validated.json")
-    qc = plan.get("qc") if isinstance(plan, dict) else None
-    for line in _cut_qc_summary_lines(qc):
-        print(line, flush=True)
-    blocking = _cut_qc_blocking_reasons(qc)
-    if blocking:
-        raise SystemExit("video-cut QC blocking/fail status: " + "; ".join(blocking))
+    """Print the cut QC video-cut recorded; cut.py itself already fails on blocking QC."""
+    qc = load_json(Path(work_dir) / "clip_plan_validated.json")["qc"]
+    print(_cut_qc_summary_line(qc), flush=True)
     return qc
 
 
 def _fmt_range(start, end):
-    try:
-        return f"{float(start):.3f}-{float(end):.3f}s"
-    except (TypeError, ValueError):
-        return f"{start}-{end}s"
+    return f"{start:.3f}-{end:.3f}s"
 
 
 def _material_library_dir(args):
-    return (
-        args.material_library_dir
-        or os.environ.get("VIDEO_RECAP_MATERIAL_LIBRARY_DIR")
-        or None
-    )
+    return args.material_library_dir or os.environ.get("VIDEO_RECAP_MATERIAL_LIBRARY_DIR") or None
 
 
 def _materials_enabled(args):
@@ -781,9 +602,7 @@ def _save_materials_enabled(args):
 def _pause_for_agent(work_dir, need_text, cont, inspect_hint=None):
     brief = Path(work_dir) / "agent_narration_brief.md"
     print("=" * 50)
-    if brief.exists() and "Research the story FIRST" in brief.read_text(
-        encoding="utf-8"
-    ):
+    if "Research the story FIRST" in brief.read_text(encoding="utf-8"):
         print(
             "[video-recap] ⚑ 理解素材偏薄：先按 brief 顶部「Research the story FIRST」调研并写 "
             "background_research.json，再写解说，避免看图说话。"

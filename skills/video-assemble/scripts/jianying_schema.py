@@ -26,11 +26,8 @@ def full_materials(filled):
 def scrub_platform_identity(project):
     """Remove hardware fingerprints carried by the pinned upstream templates."""
     for platform_key in ("last_modified_platform", "platform"):
-        platform = project.get(platform_key)
-        if not isinstance(platform, dict):
-            continue
         for identity_key in ("device_id", "hard_disk_id", "mac_address"):
-            platform[identity_key] = ""
+            project[platform_key][identity_key] = ""
     return project
 
 
@@ -88,7 +85,7 @@ def material_category_registry():
 
 def validate_material_category(category):
     """Return deterministic support metadata for a public or future material kind."""
-    normalized = (category or "").strip().lower()
+    normalized = category.strip().lower()
     registry = material_category_registry()
     info = dict(registry.get(normalized, {"status": "unsupported", "materials_key": None, "track_type": None}))
     info["category"] = normalized

@@ -118,15 +118,17 @@ def _replace_value(value, old, new):
     elif isinstance(value, str):
         if value == old:
             return new
-        stripped = value.lstrip()
-        if stripped.startswith(("{", "[")):
-            try:
-                parsed = json.loads(value)
-            except json.JSONDecodeError:
-                return value
-            replaced = _replace_value(parsed, old, new)
-            return json.dumps(replaced, ensure_ascii=False, separators=(",", ":"))
     return value
+
+
+def _replace_material_resource_path(material, materials_key, old, new):
+    """Rewrite one declared resource, including the known rich-text JSON field."""
+    _replace_value(material, old, new)
+    if materials_key != "texts" or not isinstance(material.get("content"), str):
+        return
+    content = json.loads(material["content"])
+    _replace_value(content, old, new)
+    material["content"] = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
 
 
 def _safe_resource_target(target_path):
@@ -182,16 +184,11 @@ def _is_packaged_path(value):
 
 
 def _descriptor(raw, default_kind, *, required):
-    if isinstance(raw, str):
-        source = raw
-        resource_kind = default_kind
-        target_path = None
-    elif isinstance(raw, dict):
-        source = raw.get("source_path") or raw.get("source")
-        resource_kind = raw.get("resource_kind") or raw.get("kind") or default_kind
-        target_path = raw.get("target_path")
-    else:
-        raise ValueError("JianYing resources entries must be paths or objects")
+    if not isinstance(raw, dict):
+        raise ValueError("JianYing resources entries must be objects")
+    source = raw.get("source_path")
+    resource_kind = raw.get("resource_kind", default_kind)
+    target_path = raw.get("target_path")
     if not isinstance(source, str) or not source:
         raise ValueError("JianYing resource source_path must be a non-empty string")
     if not isinstance(resource_kind, str) or resource_kind not in {
@@ -199,11 +196,6 @@ def _descriptor(raw, default_kind, *, required):
         "text", "text_template", "transition", "video",
     }:
         raise ValueError(f"invalid JianYing resource kind: {resource_kind}")
-    suffix = os.path.splitext(source)[1].lower()
-    if suffix == ".cube":
-        resource_kind = "lut"
-    elif suffix in {".ttf", ".otf"}:
-        resource_kind = "fonts"
     return {
         "source_path": source,
         "resource_kind": resource_kind,
@@ -220,7 +212,12 @@ def _material_resource_descriptors(material, default_kind):
     path = material.get("path")
     if isinstance(path, str) and path and not _is_packaged_path(path):
         if not any(item["source_path"] == path for item in descriptors):
-            descriptors.append(_descriptor(path, default_kind, required=False))
+            descriptors.append({
+                "source_path": path,
+                "resource_kind": default_kind,
+                "target_path": None,
+                "required": False,
+            })
     return descriptors
 
 
@@ -308,7 +305,9 @@ def bundle_media(content, meta, draft_dir):
                         copied[source_key] = {"draft_path": draft_path}
                     else:
                         draft_path = existing["draft_path"]
-                    _replace_value(material, src, draft_path)
+                    _replace_material_resource_path(
+                        material, materials_key, src, draft_path
+                    )
 
     material_group = next(group for group in meta["draft_materials"] if group["type"] == 0)
     material_group["value"] = meta_values

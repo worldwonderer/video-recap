@@ -22,7 +22,11 @@ from brief_context import (
     _index_prompt_fingerprint,
     _load_consolidation,
 )
-from brief_inputs import _load_clean_asr, _load_optional_stage_status
+from brief_inputs import (
+    _load_clean_asr,
+    _load_mimo_overview_for_brief,
+    _load_optional_stage_status,
+)
 
 SCENES = [{"scene_id": 0, "start": 0.0, "end": 6.0, "description": "门口对峙"}]
 ASR = [{"start": 1.0, "end": 5.0, "text": "第一句对白。第二句反击。"}]
@@ -202,10 +206,53 @@ def test_optional_stage_warnings_flag_missing_enabled_artifacts(tmp_path):
     assert "consolidation: missing_index" in text
 
 
-def test_optional_stage_status_loader_is_defensive(tmp_path):
-    assert _load_optional_stage_status(tmp_path, "missing.status.json") == {}
+def test_optional_stage_status_loader_treats_malformed_sidecar_as_unavailable(tmp_path):
+    assert _load_optional_stage_status(tmp_path, "missing.status.json") is None
     (tmp_path / "bad.status.json").write_text("[1, 2, 3]", encoding="utf-8")
-    assert _load_optional_stage_status(tmp_path, "bad.status.json") == {}
+    assert _load_optional_stage_status(tmp_path, "bad.status.json") is None
+
+
+def test_optional_brief_loaders_fall_back_on_invalid_json_schema_and_io(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setitem(CONFIG, "mimo_video_overview", True)
+    (tmp_path / "asr_result.json").write_text(json.dumps(ASR), encoding="utf-8")
+
+    (tmp_path / "asr_clean.json").write_text("not json", encoding="utf-8")
+    assert _load_clean_asr(tmp_path, ASR) is None
+    (tmp_path / "asr_clean.json").write_text("[]", encoding="utf-8")
+    assert _load_clean_asr(tmp_path, ASR) is None
+
+    (tmp_path / "mimo_video_overview.json").write_text("[]", encoding="utf-8")
+    assert _load_mimo_overview_for_brief(tmp_path, SCENES) is None
+    (tmp_path / "mimo_video_overview.json").unlink()
+    (tmp_path / "mimo_video_overview.json").mkdir()
+    assert _load_mimo_overview_for_brief(tmp_path, SCENES) is None
+
+    (tmp_path / "bad.status.json").mkdir()
+    assert _load_optional_stage_status(tmp_path, "bad.status.json") is None
+
+
+def test_consolidation_cache_files_are_optional_when_malformed_or_unreadable(tmp_path):
+    index = {
+        "characters": [],
+        "relationships": [],
+        "plot_points": [],
+        "entities": [],
+    }
+    _write_index_with_meta(tmp_path, index)
+    (tmp_path / "understanding_index.json").write_text("[]", encoding="utf-8")
+    assert _load_consolidation(tmp_path, SCENES) == {}
+
+    _write_index_with_meta(tmp_path, index)
+    (tmp_path / "understanding_index.json.meta.json").write_text(
+        "not json", encoding="utf-8"
+    )
+    assert _load_consolidation(tmp_path, SCENES) == {}
+
+    (tmp_path / "understanding_index.json.meta.json").unlink()
+    (tmp_path / "understanding_index.json.meta.json").mkdir()
+    assert _load_consolidation(tmp_path, SCENES) == {}
 
 
 def test_brief_folds_in_index_when_present(tmp_path):
@@ -258,7 +305,7 @@ def test_brief_rejects_stale_index_without_matching_vlm_provenance(tmp_path):
 
 
 def test_consolidation_loaders_are_safe_when_absent():
-    assert _load_consolidation("/nonexistent-dir") == {}
+    assert _load_consolidation("/nonexistent-dir", []) == {}
     assert _format_consolidation({}) == []
 
 

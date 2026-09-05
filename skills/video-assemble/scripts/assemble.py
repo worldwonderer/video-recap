@@ -34,6 +34,7 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
 
     video_duration = lib.get_video_duration(input_video)
     canvas = media._probe_canvas(input_video)  # drives subtitle PlayRes/scale so 竖屏 text isn't stretched
+    burn_subtitles = lib.CONFIG["burn_subtitles"]
 
     # 解说整体提速（可选）后，将所有 TTS 片段按时间位置合成到与视频等长的音轨上
     narration_audio._apply_narration_speed(tts_segments, work_dir)
@@ -53,25 +54,23 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
     srt_path = subtitle_render._generate_srt(tts_segments, work_dir, video_duration)
     lib.log(f"字幕文件: {srt_path}")
     ass_path = None
-    if lib.CONFIG.get("burn_subtitles", False):
+    if burn_subtitles:
         ass_path = subtitle_render._generate_ass(tts_segments, work_dir, video_duration, canvas)
         lib.log(f"压制字幕文件: {ass_path}")
 
     # 可选 BGM：作为一条独立音轨（input [2:a]）混入，旁白处自动压低
-    bgm_path = lib.CONFIG.get("bgm_path", "")
+    bgm_path = lib.CONFIG["bgm_path"]
     has_bgm = bool(bgm_path) and os.path.exists(bgm_path)
     if bgm_path and not has_bgm:
         lib.log(f"  ⚠️ BGM 文件不存在，跳过: {bgm_path}")
     elif has_bgm:
-        lib.log(f"BGM 铺底: {bgm_path} (音量 {lib.CONFIG.get('bgm_volume', 0.18)}，旁白时 {lib.CONFIG.get('bgm_ducking_volume', 0.10)})")
+        lib.log(f"BGM 铺底: {bgm_path} (音量 {lib.CONFIG['bgm_volume']}，旁白时 {lib.CONFIG['bgm_ducking_volume']})")
 
     # 多轨时间线模型（timeline.json）：canonical 渲染仍是 ffmpeg，此模型供检视/可选导出
-    timeline_emit._emit_timeline(input_video, tts_segments, work_dir, video_duration, has_bgm)
+    timeline_emit._emit_timeline(input_video, tts_segments, work_dir, video_duration, canvas, has_bgm)
 
     overlay_filters, overlay_qc = visual_render._visual_overlay_filters(work_dir, canvas, video_duration)
-    mask_filter = visual_render._source_subtitle_mask_filter(
-        canvas, work_dir, tts_segments, video_duration=video_duration
-    )
+    mask_filter = visual_render._source_subtitle_mask_filter(canvas, work_dir, tts_segments, video_duration)
     visual_qc = visual_render._build_visual_qc(
         tts_segments,
         work_dir,
@@ -83,8 +82,8 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
     visual_render._write_visual_qc(work_dir, visual_qc)
     assembly_qc_path = Path(work_dir) / constants.ASSEMBLY_QC
     assembly_qc_path.unlink(missing_ok=True)
-    if visual_qc.get("blocking"):
-        codes = ", ".join(visual_qc.get("blocking_codes", []))
+    if visual_qc["blocking"]:
+        codes = ", ".join(visual_qc["blocking_codes"])
         raise RuntimeError(f"视觉 QC 失败: {codes}；详见 {Path(work_dir) / constants.VISUAL_QC}")
 
     # 混合原始音频 + 解说音频（+ 可选 BGM）
@@ -112,9 +111,7 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
     # duration=first + -t trim it back to the video length).
     bgm_input = ["-stream_loop", "-1", "-i", str(bgm_path)] if has_bgm else []
 
-    # 对于超长 volume 表达式（多段解说），使用 -filter_complex_script 避免命令行溢出
     # 末端整体响度归一：ducking 只管相对平衡，这一步统一成片绝对响度
-    aout_label = "[aout]"
     loudnorm_measurement = audio_mix._run_loudnorm_first_pass(
         input_video,
         narration_wav,
@@ -124,54 +121,42 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
         work_dir,
     )
     final_ln = audio_mix.final_loudnorm_filter(loudnorm_measurement)
-    if final_ln:
-        filter_complex += f";[aout]{final_ln}[aoutln]"
-        aout_label = "[aoutln]"
-        lib.log(f"成片响度归一: {final_ln}")
+    filter_complex += f";[aout]{final_ln}[aoutln]"
+    lib.log(f"成片响度归一: {final_ln}")
 
-    filter_complex_bytes = filter_complex.encode('utf-8')
-    if len(filter_complex_bytes) > constants.FILTER_SCRIPT_THRESHOLD_BYTES:
+    # 对于超长 volume 表达式（多段解说），使用 -filter_complex_script 避免命令行溢出
+    fc_script = None
+    if len(filter_complex.encode("utf-8")) > constants.FILTER_SCRIPT_THRESHOLD_BYTES:
         fc_script = Path(work_dir) / ".filter_complex.txt"
         fc_script.write_text(filter_complex, encoding="utf-8")
-        lib.log(f"使用 filter_complex_script (表达式长度 {len(filter_complex_bytes)} bytes)")
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(input_video),
-            "-i", str(narration_wav),
-            *original_audio_input,
-            *bgm_input,
-            "-filter_complex_script", str(fc_script),
-            # 0:v:0 (not 0:v): sources with attached cover art carry a second video stream.
-            # -vf only ever applies to the first one, so mapping all of them makes ffmpeg
-            # abort with "Could not write header (incorrect codec parameters ?)" and leave
-            # an unreadable file — after the whole pipeline has already run.
-            "-map", "0:v:0", "-map", aout_label,
-        ]
+        lib.log(f"使用 filter_complex_script (表达式长度 {len(filter_complex.encode('utf-8'))} bytes)")
+        filter_args = ["-filter_complex_script", str(fc_script)]
     else:
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", str(input_video),
-            "-i", str(narration_wav),
-            *original_audio_input,
-            *bgm_input,
-            "-filter_complex", filter_complex,
-            # 0:v:0 (not 0:v): sources with attached cover art carry a second video stream.
-            # -vf only ever applies to the first one, so mapping all of them makes ffmpeg
-            # abort with "Could not write header (incorrect codec parameters ?)" and leave
-            # an unreadable file — after the whole pipeline has already run.
-            "-map", "0:v:0", "-map", aout_label,
-        ]
+        filter_args = ["-filter_complex", filter_complex]
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(input_video),
+        "-i", str(narration_wav),
+        *original_audio_input,
+        *bgm_input,
+        *filter_args,
+        # 0:v:0 (not 0:v): sources with attached cover art carry a second video stream.
+        # -vf only ever applies to the first one, so mapping all of them makes ffmpeg
+        # abort with "Could not write header (incorrect codec parameters ?)" and leave
+        # an unreadable file — after the whole pipeline has already run.
+        "-map", "0:v:0", "-map", "[aoutln]",
+    ]
 
     # Video filter chain: mask source subtitles first (drawbox), then burn our subtitles
     # on top. Either one forces a re-encode; with neither, the video stream is copied.
-    crf = str(lib.CONFIG.get("output_crf", 18))  # env_int already clamps to >=0; keep 0 (lossless) intact
-    preset = str(lib.CONFIG.get("output_preset", "veryfast") or "veryfast")
-    max_h = int(lib.CONFIG.get("output_max_height", 0) or 0)
+    crf = str(lib.CONFIG["output_crf"])  # env_int already clamps to >=0; keep 0 (lossless) intact
+    preset = lib.CONFIG["output_preset"]
+    max_h = lib.CONFIG["output_max_height"]
     vf_chain = []
     if mask_filter:
         vf_chain.append(mask_filter)
     vf_chain.extend(overlay_filters)
-    if lib.CONFIG.get("burn_subtitles", False):
+    if burn_subtitles:
         vf_chain.append(visual_render._subtitle_burn_filter(ass_path))
     # Downscale LAST so the mask + burned subtitles render at native resolution and are then
     # scaled down with the frame (crisp). The helper forces both dimensions even so an odd
@@ -183,6 +168,7 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
     # needs EVEN width AND height, so normalize odd dims (4:2:2/4:4:4 permit them) before the
     # encode — otherwise libx264 aborts to a 0-byte file. The downscale helper already evens out.
     even = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+    reencode = bool(vf_chain) or lib.CONFIG["force_video_reencode"]
     notes = []
     video_filter_script = None
     if vf_chain:
@@ -202,10 +188,10 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
         cmd += ["-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p"]
         notes = ((["遮挡原字幕"] if mask_filter else [])
                  + ([f"视觉叠加×{len(overlay_filters)}"] if overlay_filters else [])
-                 + (["压制解说字幕"] if lib.CONFIG.get("burn_subtitles", False) else [])
+                 + (["压制解说字幕"] if burn_subtitles else [])
                  + ([f"缩放≤{max_h}p"] if max_h > 0 else []))
         lib.log(f"视频重编码: {' + '.join(notes)} (crf={crf}, preset={preset})")
-    elif lib.CONFIG.get("force_video_reencode", False):
+    elif reencode:
         notes = ["force_video_reencode"]
         cmd += ["-vf", even, "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p"]
     else:
@@ -220,8 +206,8 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
         if result.returncode != 0:
             raise RuntimeError(f"视频组装失败: {result.stderr}")
     finally:
-        # 清理临时 filter_complex 脚本（无论 ffmpeg 是否成功）
-        if len(filter_complex_bytes) > constants.FILTER_SCRIPT_THRESHOLD_BYTES:
+        # 清理临时 filter 脚本（无论 ffmpeg 是否成功）
+        if fc_script is not None:
             fc_script.unlink(missing_ok=True)
         if video_filter_script is not None:
             video_filter_script.unlink(missing_ok=True)
@@ -237,10 +223,10 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
             loudnorm_measurement=loudnorm_measurement,
             visual_qc=visual_qc,
             render_delivery={
-                "video_encode_passes": 1 if (vf_chain or lib.CONFIG.get("force_video_reencode", False)) else 0,
-                "reencode_reason": notes if (vf_chain or lib.CONFIG.get("force_video_reencode", False)) else [],
+                "video_encode_passes": 1 if reencode else 0,
+                "reencode_reason": notes,
                 "audio_sample_rate": 48000,
-                "final_compat_notes": ["yuv420p"] if (vf_chain or lib.CONFIG.get("force_video_reencode", False)) else ["video_copy", "aac_48000", "faststart"],
+                "final_compat_notes": ["yuv420p"] if reencode else ["video_copy", "aac_48000", "faststart"],
             },
         ),
     )
@@ -250,7 +236,6 @@ def assemble_video(input_video, tts_segments, work_dir, output_path):
 def main():
     import argparse
     import shutil
-    from pathlib import Path
     ap = argparse.ArgumentParser(
         description="video-assemble: mux narration audio over the video, duck the original, render subtitles.")
     ap.add_argument("video", help="source video (edited_source.mp4 in cut mode, else the original)")
@@ -294,6 +279,8 @@ def main():
         if "SUBTITLE_MASK_OPACITY" not in os.environ:
             lib.CONFIG["subtitle_mask_opacity"] = 1.0
     if args.source_video:
+        if not os.path.exists(args.source_video):
+            ap.error(f"--source-video does not exist: {args.source_video}")
         lib.CONFIG["source_video"] = args.source_video
         lib.CONFIG["source_video_explicit"] = True
     else:
@@ -313,9 +300,9 @@ def main():
     tts_segments = json.loads(tts_meta.read_text(encoding="utf-8"))["segments"]
     output_path = work_dir / "output.mp4"
     assemble_video(args.video, tts_segments, work_dir, output_path)
-    assembly_qc = artifacts._load_work_json(work_dir, constants.ASSEMBLY_QC) or {}
-    if assembly_qc.get("blocking"):
-        codes = ", ".join(assembly_qc.get("blocking_codes") or ["unknown"])
+    assembly_qc = artifacts._load_work_json(work_dir, constants.ASSEMBLY_QC)
+    if assembly_qc["blocking"]:
+        codes = ", ".join(assembly_qc["blocking_codes"])
         raise SystemExit(f"组装 QC 阻断交付: {codes}；详见 {work_dir / constants.ASSEMBLY_QC}")
     stem = args.recap_stem or Path(args.video).stem
     base = Path(args.output_dir) if args.output_dir else work_dir.parent
@@ -333,7 +320,7 @@ def main():
 
     # OPTIONAL, decoupled: export a 剪映 draft from the timeline (lazy import; never
     # required by the core render path).
-    if lib.CONFIG.get("export_jianying"):
+    if lib.CONFIG["export_jianying"]:
         from jianying_optional import _maybe_export_jianying
         _maybe_export_jianying(work_dir, args.jianying_out, stem)
 

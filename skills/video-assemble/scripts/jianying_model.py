@@ -50,20 +50,22 @@ class DraftBuildContext:
 
     @classmethod
     def from_timeline(cls, timeline, new_id, probe):
-        canvas = timeline.get("canvas", {})
+        """Build from a timeline already validated by jianying_timeline_contract."""
+        canvas = timeline["canvas"]
         return cls(
-            width=int(canvas.get("width", 1920)),
-            height=int(canvas.get("height", 1080)),
-            fps=float(canvas.get("fps", 30)),
-            total_us=us(timeline.get("duration", 0)),
+            width=canvas["width"],
+            height=canvas["height"],
+            fps=float(canvas["fps"]),
+            total_us=us(timeline["duration"]),
             new_id=new_id,
             probe=probe,
-            resource_packages=dict(timeline.get("resource_packages") or {}),
-            style_presets=dict(timeline.get("style_presets") or {}),
+            resource_packages=timeline.get("resource_packages", {}),
+            style_presets=timeline.get("style_presets", {}),
         )
 
     def media_duration(self, path, fallback_us):
-        if path and os.path.exists(path):
+        """(duration_us, width, height) probed from the file; images and missing files fall back."""
+        if os.path.exists(path):
             duration_us, width, height = self.probe(path)
             return duration_us or fallback_us, width, height
         return fallback_us, 0, 0
@@ -97,14 +99,14 @@ class DraftBuildContext:
     def finalize_tracks(self):
         # Python's stable sort preserves the timeline's authored order inside
         # one semantic band (for example narration before BGM).
-        self.tracks.sort(key=lambda item: item.get("_layout_order", 120_000))
+        self.tracks.sort(key=lambda item: item["_layout_order"])
         type_counts = {}
         for track in self.tracks:
             count = type_counts.get(track["type"], 0)
             track["flag"] = 0 if count == 0 else 2
             type_counts[track["type"]] = count + 1
-            track.pop("_semantic_kind", None)
-            track.pop("_layout_order", None)
+            del track["_semantic_kind"]
+            del track["_layout_order"]
         return self.tracks
 
     def note(self, message):

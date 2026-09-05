@@ -114,36 +114,15 @@ def merge_review_findings(chunks):
 
 
 def _bundle_fingerprint(bundle):
-    try:
-        return stable_hash(
-            {
-                "schema_version": bundle.get("schema_version"),
-                "clock": bundle.get("clock"),
-                "coverage": bundle.get("coverage"),
-                "items": bundle.get("items"),
-                "context_items": bundle.get("context_items"),
-            }
-        )
-    except (TypeError, ValueError, RecursionError) as exc:
-        if isinstance(bundle, dict):
-            bundle.setdefault("metadata", {})["evidence_bundle_fingerprint_warning"] = (
-                f"evidence bundle fingerprint unavailable: {type(exc).__name__}"
-            )
-        return ""
-
-
-def _bundle_fingerprint_warning(bundle):
-    if not isinstance(bundle, dict):
-        return "evidence bundle fingerprint unavailable: invalid bundle"
-    warning = (bundle.get("metadata") or {}).get("evidence_bundle_fingerprint_warning")
-    if warning:
-        return warning
-    return ""
-
-
-def _append_warning_once(target, warning):
-    if warning and warning not in target:
-        target.append(warning)
+    return stable_hash(
+        {
+            "schema_version": bundle.get("schema_version"),
+            "clock": bundle.get("clock"),
+            "coverage": bundle.get("coverage"),
+            "items": bundle.get("items"),
+            "context_items": bundle.get("context_items"),
+        }
+    )
 
 
 def _bundle_prompt_size(bundle):
@@ -163,13 +142,9 @@ def _chunk_evidence_bundle(bundle, *, max_items=80, max_chars=12000):
         one = dict(bundle)
         one["chunk_index"] = 0
         one["chunk_count"] = 1
-        fp = _bundle_fingerprint(bundle)
-        fp_warning = _bundle_fingerprint_warning(bundle)
-        one.setdefault("metadata", {})["evidence_bundle_fingerprint"] = fp
-        if fp_warning:
-            one["metadata"]["evidence_bundle_fingerprint_warning"] = fp_warning
-            one.setdefault("warnings", list(bundle.get("warnings") or []))
-            _append_warning_once(one["warnings"], fp_warning)
+        one.setdefault("metadata", {})["evidence_bundle_fingerprint"] = (
+            _bundle_fingerprint(bundle)
+        )
         return [one]
     ranges = bundle.get("coverage", {}).get("selected_ranges") or []
     chunks = []
@@ -210,15 +185,10 @@ def _chunk_evidence_bundle(bundle, *, max_items=80, max_chars=12000):
         chunks = [chunk]
     count = len(chunks)
     fp = _bundle_fingerprint(bundle)
-    fp_warning = _bundle_fingerprint_warning(bundle)
     for chunk in chunks:
         chunk["chunk_count"] = count
         chunk.setdefault("metadata", {})["chunked_review"] = count > 1
         chunk["metadata"]["evidence_bundle_fingerprint"] = fp
-        if fp_warning:
-            chunk["metadata"]["evidence_bundle_fingerprint_warning"] = fp_warning
-            chunk.setdefault("warnings", list(bundle.get("warnings") or []))
-            _append_warning_once(chunk["warnings"], fp_warning)
     return chunks
 
 

@@ -4,51 +4,33 @@ from lib import log
 
 
 def source_time_to_output_time(source_time, clips):
-    """Map a source timestamp into the post-concat output timeline."""
-    ts = float(source_time)
+    """Map a source timestamp into the post-concat output timeline (None when cut away)."""
     for clip in clips:
         start = clip["source_start"]
         end = clip["source_end"]
-        if start <= ts <= end:
-            mapped = clip["output_start"] + (ts - start)
+        if start <= source_time <= end:
+            mapped = clip["output_start"] + (source_time - start)
             return round(max(clip["output_start"], min(mapped, clip["output_end"])), 3)
     return None
 
 
 def _clips_for_midpoint(start, end, clips):
-    mid = (float(start) + float(end)) / 2
+    mid = (start + end) / 2
     return [clip for clip in clips if clip["source_start"] <= mid <= clip["source_end"]]
 
 
 def map_narration_to_clips(narration, validated_plan, min_duration=0.3):
     """Convert source-time narration segments to edited-output timeline segments."""
-    clips = (
-        validated_plan["clips"] if isinstance(validated_plan, dict) else validated_plan
-    )
+    clips = validated_plan["clips"]
     mapped = []
-    for raw in narration or []:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            source_start = float(raw.get("start"))
-            source_end = float(raw.get("end"))
-        except (TypeError, ValueError):
-            continue
-        text = str(raw.get("narration", "")).strip()
-        if source_end <= source_start or not text:
-            continue
+    for raw in narration:
+        source_start = raw["start"]
+        source_end = raw["end"]
         if raw.get("source_clip_id") is not None:
-            try:
-                requested_clip_id = int(raw.get("source_clip_id"))
-            except (TypeError, ValueError):
-                requested_clip_id = None
-            clip = next(
-                (c for c in clips if c.get("clip_id") == requested_clip_id), None
-            )
+            requested_clip_id = int(raw["source_clip_id"])
+            clip = next((c for c in clips if c["clip_id"] == requested_clip_id), None)
             if clip and not (
-                clip["source_start"]
-                <= ((source_start + source_end) / 2)
-                <= clip["source_end"]
+                clip["source_start"] <= (source_start + source_end) / 2 <= clip["source_end"]
             ):
                 clip = None
         else:
@@ -67,16 +49,12 @@ def map_narration_to_clips(narration, validated_plan, min_duration=0.3):
         if clipped_source_end - clipped_source_start < min_duration:
             log(f"  丢弃过短映射解说: {source_start:.1f}-{source_end:.1f}s")
             continue
-        output_start = source_time_to_output_time(clipped_source_start, [clip])
-        output_end = source_time_to_output_time(clipped_source_end, [clip])
-        if output_start is None or output_end is None or output_end <= output_start:
-            continue
         item = dict(raw)
         item["source_start"] = round(clipped_source_start, 3)
         item["source_end"] = round(clipped_source_end, 3)
         item["source_clip_id"] = clip["clip_id"]
-        item["start"] = output_start
-        item["end"] = output_end
+        item["start"] = source_time_to_output_time(clipped_source_start, [clip])
+        item["end"] = source_time_to_output_time(clipped_source_end, [clip])
         # Tag beats trimmed to a clip edge: their TEXT was written for a longer span and may
         # now describe footage that was cut away (a stale-text desync the lint surfaces).
         item["clamped"] = bool(
@@ -108,17 +86,15 @@ def lint_mapped_narration(
     enforces unless --allow-sparse-cut. Clamped beats are always blocking because their TTS
     sentence would be cut at a clip edge; sparse-cut intent never authorizes speech truncation.
     """
-    mapped = sorted(mapped or [], key=lambda s: float(s.get("start", 0.0)))
+    mapped = sorted(mapped, key=lambda s: s["start"])
     mapped_count = len(mapped)
-    original_count = int(original_count or 0)
     dropped = max(0, original_count - mapped_count)
     drop_ratio = dropped / original_count if original_count else 0.0
-    out_dur = float(output_duration or 0.0)
-    spm = mapped_count / (out_dur / 60) if out_dur > 0 else 0.0
-    gaps = [float(b["start"]) - float(a["end"]) for a, b in zip(mapped, mapped[1:])]
+    spm = mapped_count / (output_duration / 60) if output_duration > 0 else 0.0
+    gaps = [b["start"] - a["end"] for a, b in zip(mapped, mapped[1:])]
     max_gap = max(gaps) if gaps else 0.0
-    covered = sum(max(0.0, float(b["end"]) - float(b["start"])) for b in mapped)
-    coverage = covered / out_dur if out_dur > 0 else 0.0
+    covered = sum(max(0.0, b["end"] - b["start"]) for b in mapped)
+    coverage = covered / output_duration if output_duration > 0 else 0.0
 
     warnings = []
     if drop_ratio >= drop_ratio_limit:
@@ -149,7 +125,7 @@ def lint_mapped_narration(
                 "max_gap_limit_seconds": max_gap_seconds,
             }
         )
-    clamped = [b for b in mapped if isinstance(b, dict) and b.get("clamped")]
+    clamped = [b for b in mapped if b["clamped"]]
     if clamped:
         warnings.append(
             {
@@ -168,7 +144,7 @@ def lint_mapped_narration(
         "mapped_count": mapped_count,
         "dropped": dropped,
         "drop_ratio": round(drop_ratio, 2),
-        "output_duration": round(out_dur, 2),
+        "output_duration": round(output_duration, 2),
         "segments_per_minute": round(spm, 2),
         "max_gap_seconds": round(max_gap, 2),
         "coverage": round(coverage, 2),
@@ -180,12 +156,12 @@ def lint_mapped_narration(
 
 def update_cut_qc(plan, *, allow_duration_drift=False, duration_drift_allowed_by=None):
     """Populate clip_plan_validated.json['qc'] as the single cut QC source."""
-    qc = dict(plan.get("qc") or {})
-    warnings = list(qc.get("warnings") or [])
-    blocking = list(qc.get("blocking") or [])
-    total = float(plan.get("total_duration") or 0.0)
-    target = plan.get("target_duration")
-    if target in (None, ""):
+    qc = dict(plan.get("qc", {}))
+    warnings = list(qc.get("warnings", []))
+    blocking = list(qc.get("blocking", []))
+    total = plan["total_duration"]
+    target = plan["target_duration"]
+    if target is None:
         target_status = "missing"
         target_qc = {
             "status": target_status,
@@ -193,7 +169,6 @@ def update_cut_qc(plan, *, allow_duration_drift=False, duration_drift_allowed_by
             "total_duration": round(total, 3),
         }
     else:
-        target = float(target)
         ratio = total / target if target > 0 else 0.0
         if ratio < 0.85:
             target_status = "under"
@@ -237,13 +212,13 @@ def update_cut_qc(plan, *, allow_duration_drift=False, duration_drift_allowed_by
     qc["target_duration_status"] = target_status
     qc["target_duration"] = target_qc
     qc.setdefault("boundary_status", {})
-    qc["clip_count"] = len(plan.get("clips") or [])
+    qc["clip_count"] = len(plan["clips"])
     qc["total_duration"] = round(total, 3)
     if warnings:
         qc["warnings"] = warnings
     if blocking:
         qc["blocking"] = blocking
-    elif "blocking" in qc:
+    else:
         qc.pop("blocking", None)
     plan["qc"] = qc
     return plan

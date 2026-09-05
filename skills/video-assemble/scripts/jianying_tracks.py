@@ -60,10 +60,7 @@ class TrackAllocator:
         return any(int(start_us) < old_end and end_us > old_start for old_start, old_end in existing)
 
     def allocate(self, kind, base_name, start_us, duration_us):
-        band = TRACK_LAYOUT_BANDS.get(kind)
-        if band is None:
-            band = TrackBand(kind, "video", 120_000, "unregistered fallback")
-        base_name = base_name or kind
+        band = TRACK_LAYOUT_BANDS[kind]
         suffix = 0
         while True:
             name = base_name if suffix == 0 else f"{base_name}-{suffix}"

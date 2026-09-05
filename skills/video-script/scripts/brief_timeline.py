@@ -1,73 +1,51 @@
 """Remap cut evidence and format output-timeline brief directives."""
 
-import importlib.util
-
-
 import json
-
 import math
-
 import re
-
 from pathlib import Path
 
 from lib import CONFIG, stable_hash
 
 
-try:
-    from deslop_qc import analyze_deslop_qc
-except ModuleNotFoundError:
-    _deslop_qc_path = Path(__file__).with_name("deslop_qc.py")
-    _deslop_qc_spec = importlib.util.spec_from_file_location(
-        "deslop_qc", _deslop_qc_path
-    )
-    if _deslop_qc_spec is None or _deslop_qc_spec.loader is None:
-        raise
-    _deslop_qc_module = importlib.util.module_from_spec(_deslop_qc_spec)
-    _deslop_qc_spec.loader.exec_module(_deslop_qc_module)
-    analyze_deslop_qc = _deslop_qc_module.analyze_deslop_qc
-
-
 def _parse_target_seconds(value):
     """Parse a cut-mode target duration ("30m" / "600" / "1h5m" / "00:30:00") to seconds.
 
-    Mirrors the local clip-plan contract closely enough to size the brief; returns None
-    on unparseable input so the brief simply falls back to the source duration.
+    None or blank means the knob is unset (None). Any other value that does not parse to
+    a positive duration is a typo in user input and raises ValueError.
     """
     if value is None:
         return None
     if isinstance(value, (int, float)):
-        return float(value) if value > 0 else None
-    text = str(value).strip().lower()
-    if not text:
-        return None
-    try:
+        seconds = float(value)
+    else:
+        text = str(value).strip().lower()
+        if not text:
+            return None
         if ":" in text:
             parts = [float(p) for p in text.split(":")]
-            if any(p < 0 for p in parts):
-                return None
             if len(parts) == 2:
                 seconds = parts[0] * 60 + parts[1]
             elif len(parts) == 3:
                 seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
             else:
-                return None
-            return seconds if seconds > 0 else None
-        factors = {"ms": 0.001, "s": 1, "m": 60, "h": 3600}
-        seconds = 0.0
-        matched = False
-        pos = 0
-        for m in re.finditer(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?", text):
-            if m.start() != pos:
-                break
-            pos = m.end()
-            matched = True
-            seconds += float(m.group(1)) * factors[m.group(2) or "s"]
-        if not matched or pos != len(text):
-            return None
-        return seconds if seconds > 0 else None
-    except (ValueError, TypeError):
-        return None
+                raise ValueError(f"unparseable target duration: {value!r}")
+            if any(p < 0 for p in parts):
+                raise ValueError(f"unparseable target duration: {value!r}")
+        else:
+            factors = {"ms": 0.001, "s": 1, "m": 60, "h": 3600}
+            seconds = 0.0
+            pos = 0
+            for m in re.finditer(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?", text):
+                if m.start() != pos:
+                    break
+                pos = m.end()
+                seconds += float(m.group(1)) * factors[m.group(2) or "s"]
+            if pos == 0 or pos != len(text):
+                raise ValueError(f"unparseable target duration: {value!r}")
+    if not seconds > 0:
+        raise ValueError(f"target duration must be positive: {value!r}")
+    return seconds
 
 
 def _format_research_directive(work_dir, substrate):
@@ -81,9 +59,9 @@ def _format_research_directive(work_dir, substrate):
     """
     if (Path(work_dir) / "background_research.json").exists():
         return []  # already researched; _format_background_research surfaces it
-    if not (substrate and substrate.get("level") in ("thin", "empty")):
+    if substrate["level"] not in ("thin", "empty"):
         return []  # rich enough to write from dialogue/spine; do not nag
-    context = str(CONFIG.get("context_info") or "").strip()
+    context = CONFIG["context_info"].strip()
     return [
         "## ⚑ Research the story FIRST (do this before writing narration)",
         "",
@@ -114,9 +92,9 @@ def _load_cut_output_spans_for_brief(work_dir, *, required=False):
         if required:
             raise SystemExit(
                 "cut pass2 brief requires fresh clip_plan_validated.json with explicit "
-                f"finite source/output spans ({reason})"
+                f"source/output spans ({reason})"
             )
-        return
+        return None
 
     work_dir = Path(work_dir)
     if not (work_dir / "edited_source.mp4").exists():
@@ -124,59 +102,31 @@ def _load_cut_output_spans_for_brief(work_dir, *, required=False):
     validated_path = work_dir / "clip_plan_validated.json"
     if not validated_path.exists():
         return fail("missing clip_plan_validated.json")
-    try:
-        plan = json.loads(validated_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return fail("invalid clip_plan_validated.json")
-    if not isinstance(plan, dict):
-        return fail("clip_plan_validated.json is not an object")
+    plan = json.loads(validated_path.read_text(encoding="utf-8"))
     raw_path = work_dir / "clip_plan.json"
-    if raw_path.exists():
-        try:
-            raw_plan = json.loads(raw_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return fail("invalid clip_plan.json")
-        if plan.get("raw_plan_fingerprint") != stable_hash(raw_plan):
-            return fail("stale clip_plan_validated.json")
-    clips = plan.get("clips")
-    if not isinstance(clips, list):
-        return fail("clips is not a list")
+    if raw_path.exists() and plan["raw_plan_fingerprint"] != stable_hash(
+        json.loads(raw_path.read_text(encoding="utf-8"))
+    ):
+        return fail("stale clip_plan_validated.json")
     spans = []
-    for clip in clips:
-        if not isinstance(clip, dict):
-            continue
-        if not all(
-            key in clip
+    for clip in plan["clips"]:
+        span = {
+            key: clip[key]
             for key in ("source_start", "source_end", "output_start", "output_end")
-        ):
-            return fail("clip missing source/output span fields")
-        try:
-            ss = float(clip["source_start"])
-            se = float(clip["source_end"])
-            os_ = float(clip["output_start"])
-            oe = float(clip["output_end"])
-        except (TypeError, ValueError):
-            return fail("non-numeric clip span")
-        if not all(math.isfinite(x) for x in (ss, se, os_, oe)):
+        }
+        if not all(math.isfinite(value) for value in span.values()):
             return fail("non-finite clip span")
-        if se <= ss or oe <= os_:
+        if span["source_end"] <= span["source_start"] or span["output_end"] <= span["output_start"]:
             return fail("non-positive clip span")
-        spans.append(
-            {
-                "source_start": ss,
-                "source_end": se,
-                "output_start": os_,
-                "output_end": oe,
-            }
-        )
-    return spans or fail("no valid clips")
+        spans.append(span)
+    return spans or fail("no clips")
 
 
 def _source_output_overlaps_for_brief(start, end, spans):
     overlaps = []
-    for span in spans or []:
-        source_start = max(float(start), span["source_start"])
-        source_end = min(float(end), span["source_end"])
+    for span in spans:
+        source_start = max(start, span["source_start"])
+        source_end = min(end, span["source_end"])
         if source_end <= source_start:
             continue
         output_start = span["output_start"] + (source_start - span["source_start"])
@@ -193,14 +143,9 @@ def _source_output_overlaps_for_brief(start, end, spans):
 
 
 def _remap_frame_facts_for_brief(frame_facts, overlap):
-    if not isinstance(frame_facts, dict):
-        return frame_facts
     out = {}
     for raw_ts, vals in frame_facts.items():
-        try:
-            ts = float(raw_ts)
-        except (TypeError, ValueError):
-            continue
+        ts = float(raw_ts)
         if not (overlap["source_start"] <= ts <= overlap["source_end"]):
             continue
         out_ts = overlap["output_start"] + (ts - overlap["source_start"])
@@ -209,54 +154,34 @@ def _remap_frame_facts_for_brief(frame_facts, overlap):
 
 
 def _remap_scenes_to_output_for_brief(scenes, spans):
-    if not spans:
-        return scenes or []
     out = []
-    for scene in scenes or []:
-        if not isinstance(scene, dict):
-            continue
-        try:
-            start = float(scene.get("start", 0))
-            end = float(scene.get("end", start))
-        except (TypeError, ValueError):
-            continue
-        overlaps = _source_output_overlaps_for_brief(start, end, spans)
+    for scene in scenes:
+        overlaps = _source_output_overlaps_for_brief(scene["start"], scene["end"], spans)
         for part_idx, overlap in enumerate(overlaps):
             item = dict(scene)
             item["start"] = round(overlap["output_start"], 3)
             item["end"] = round(overlap["output_end"], 3)
             item["frame_facts"] = _remap_frame_facts_for_brief(
-                scene.get("frame_facts"), overlap
+                scene.get("frame_facts", {}), overlap
             )
             if len(overlaps) > 1:
-                item["scene_id"] = f"{scene.get('scene_id', '?')}.{part_idx}"
+                item["scene_id"] = f"{scene['scene_id']}.{part_idx}"
             out.append(item)
-    out.sort(key=lambda x: (float(x.get("start", 0)), float(x.get("end", 0))))
+    out.sort(key=lambda x: (x["start"], x["end"]))
     return out
 
 
 def _remap_segments_to_output_for_brief(segments, spans):
-    if not spans:
-        return segments or []
     out = []
-    for seg in segments or []:
-        if not isinstance(seg, dict):
-            continue
-        try:
-            start = float(seg.get("start", 0))
-            end = float(seg.get("end", start))
-        except (TypeError, ValueError):
-            continue
-        if end <= start:
-            continue
-        for overlap in _source_output_overlaps_for_brief(start, end, spans):
+    for seg in segments:
+        for overlap in _source_output_overlaps_for_brief(seg["start"], seg["end"], spans):
             item = dict(seg)
             item["start"] = round(overlap["output_start"], 3)
             item["end"] = round(overlap["output_end"], 3)
             if "duration" in item:
                 item["duration"] = round(item["end"] - item["start"], 3)
             out.append(item)
-    out.sort(key=lambda x: (float(x.get("start", 0)), float(x.get("end", 0))))
+    out.sort(key=lambda x: (x["start"], x["end"]))
     return out
 
 
@@ -273,26 +198,27 @@ def _remap_brief_evidence_to_output_timeline(
     )
 
 
+def _read_json(path, default):
+    """JSON artifact, or `default` when the optional file was never written."""
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+
+
 def _sentence_entry_anchors_for_brief(work_dir, edit_mode):
     """Load sentence anchors and remap them to cut OUTPUT time when needed."""
     work_dir = Path(work_dir)
-    source_path = work_dir / "speech_boundary_anchors.json"
-    try:
-        payload = json.loads(source_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        payload = {}
-    anchors = payload.get("sentence_anchors", []) if isinstance(payload, dict) else []
-    anchors = [dict(item) for item in anchors if isinstance(item, dict)]
+    anchors = [
+        dict(item)
+        for item in _read_json(
+            work_dir / "speech_boundary_anchors.json", {"sentence_anchors": []}
+        )["sentence_anchors"]
+    ]
     if edit_mode != "cut" or not (work_dir / "edited_source.mp4").exists():
         return anchors
 
     spans = _load_cut_output_spans_for_brief(work_dir, required=True)
     remapped = []
     for anchor in anchors:
-        try:
-            source_time = float(anchor.get("time"))
-        except (TypeError, ValueError):
-            continue
+        source_time = anchor["time"]
         for span in spans:
             if span["source_start"] - 0.05 <= source_time <= span["source_end"] + 0.05:
                 item = dict(anchor)
@@ -300,16 +226,10 @@ def _sentence_entry_anchors_for_brief(work_dir, edit_mode):
                 item["time"] = round(
                     span["output_start"] + source_time - span["source_start"], 3
                 )
-                try:
-                    source_pause_start = float(
-                        anchor.get("pause_start", source_time - 0.12)
-                    )
-                except (TypeError, ValueError):
-                    source_pause_start = source_time - 0.12
-                # Preserve the measured safe pause in OUTPUT time too. Leaving pause_start
-                # in SOURCE time made cut-mode lint compare two different clocks.
+                # Preserve the measured safe pause in OUTPUT time too, so cut-mode lint
+                # compares one clock.
                 source_pause_start = max(
-                    span["source_start"], min(source_pause_start, source_time)
+                    span["source_start"], min(anchor.get("pause_start", source_time - 0.12), source_time)
                 )
                 item["source_pause_start"] = round(source_pause_start, 3)
                 item["pause_start"] = round(
@@ -317,34 +237,14 @@ def _sentence_entry_anchors_for_brief(work_dir, edit_mode):
                 )
                 remapped.append(item)
 
-    speech_rows = []
-    for name in ("asr_result.json", "asr_clean.json"):
-        try:
-            raw = json.loads((work_dir / name).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(raw, dict):
-            raw = raw.get("segments", [])
-        if isinstance(raw, list):
-            candidate = [
-                item
-                for item in raw
-                if isinstance(item, dict) and str(item.get("text") or "").strip()
-            ]
-            if candidate:
-                speech_rows = candidate
-                break
-    try:
-        raw_quiet = json.loads(
-            (work_dir / "silence_periods.json").read_text(encoding="utf-8")
-        )
-    except (OSError, json.JSONDecodeError):
-        raw_quiet = []
+    speech_rows = [
+        row for row in _read_json(work_dir / "asr_result.json", []) if row["text"]
+    ]
     quiet_rows = [
-        item
-        for item in raw_quiet
-        if isinstance(item, dict) and not bool(item.get("has_speech", False))
-    ] if isinstance(raw_quiet, list) else []
+        row
+        for row in _read_json(work_dir / "silence_periods.json", [])
+        if not row["has_speech"]
+    ]
     out_payload = {
         "schema_version": 2,
         "artifact": "speech_boundary_anchors_output.json",
@@ -353,7 +253,7 @@ def _sentence_entry_anchors_for_brief(work_dir, edit_mode):
         "clip_plan_fingerprint": stable_hash(
             json.loads((work_dir / "clip_plan_validated.json").read_text(encoding="utf-8"))
         ),
-        "sentence_anchors": sorted(remapped, key=lambda item: float(item["time"])),
+        "sentence_anchors": sorted(remapped, key=lambda item: item["time"]),
         "speech_spans": _remap_segments_to_output_for_brief(speech_rows, spans),
         "quiet_windows": _remap_segments_to_output_for_brief(quiet_rows, spans),
     }
@@ -364,15 +264,11 @@ def _sentence_entry_anchors_for_brief(work_dir, edit_mode):
 
 
 def _format_sentence_entry_anchors_for_brief(work_dir, edit_mode):
-    anchors = []
-    for anchor in _sentence_entry_anchors_for_brief(work_dir, edit_mode):
-        if anchor.get("confidence") not in {"high", "medium"}:
-            continue
-        try:
-            when = float(anchor.get("time"))
-        except (TypeError, ValueError):
-            continue
-        anchors.append((when, anchor))
+    anchors = [
+        anchor
+        for anchor in _sentence_entry_anchors_for_brief(work_dir, edit_mode)
+        if anchor["confidence"] in {"high", "medium"}
+    ]
     if not anchors:
         return []
     lines = [
@@ -384,13 +280,14 @@ def _format_sentence_entry_anchors_for_brief(work_dir, edit_mode):
         '- 原声句子完整性是硬约束：切入块写 `"source_entry_policy": "sentence_boundary"`；'
         "不存在 `intentional_interrupt` 绕过方式。没有后续可靠句末锚点时，移动、缩短或删除旁白块。",
     ]
-    for when, anchor in anchors:
-        tail = str(anchor.get("text_tail") or "").strip()
-        confidence = anchor.get("confidence", "unknown")
-        source_suffix = ""
-        if "source_time" in anchor:
-            source_suffix = f" (SOURCE {float(anchor['source_time']):.2f}s)"
-        lines.append(f"- {when:.2f}s [{confidence}]{source_suffix} {tail}")
+    for anchor in anchors:
+        source_suffix = (
+            f" (SOURCE {anchor['source_time']:.2f}s)" if "source_time" in anchor else ""
+        )
+        text_tail = str(anchor.get("text_tail", "")).strip()
+        lines.append(
+            f"- {anchor['time']:.2f}s [{anchor['confidence']}]{source_suffix} {text_tail}".rstrip()
+        )
     lines.append("")
     return lines
 
@@ -401,25 +298,13 @@ def _format_output_clip_list(work_dir):
     path = Path(work_dir) / "clip_plan_validated.json"
     if not path.exists():
         return []
-    try:
-        plan = json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return []
-    clips = (plan.get("clips") if isinstance(plan, dict) else plan) or []
+    plan = json.loads(path.read_text(encoding="utf-8"))
     out = ["## Kept clips on the OUTPUT timeline", ""]
-    for c in clips:
-        if not isinstance(c, dict):
-            continue
-        try:
-            os_, oe = float(c.get("output_start")), float(c.get("output_end"))
-            ss, se = float(c.get("source_start")), float(c.get("source_end"))
-        except (TypeError, ValueError):
-            continue
-        reason = str(c.get("reason", "")).strip()
-        source_id = c.get("source_id", c.get("source", "0"))
-        clip_id = c.get("id", c.get("clip_id", "?"))
+    for c in plan["clips"]:
+        reason = c.get("reason", "")
         out.append(
-            f"- OUTPUT {os_:.1f}–{oe:.1f}s ← SOURCE[{source_id}] {ss:.1f}–{se:.1f}s (clip_id={clip_id})"
+            f"- OUTPUT {c['output_start']:.1f}–{c['output_end']:.1f}s ← SOURCE[{c.get('source_id', '0')}] "
+            f"{c['source_start']:.1f}–{c['source_end']:.1f}s (clip_id={c.get('clip_id', '?')})"
             + (f" — {reason}" if reason else "")
         )
     out.append("")

@@ -1,61 +1,29 @@
 """Load and format research, consolidation, and substrate context."""
 
 import hashlib
-
-import importlib.util
-
-
 import json
-
-
 import re
-
 from pathlib import Path
 
 from lib import CONFIG
 
-from lib import log
-
-try:
-    from deslop_qc import analyze_deslop_qc
-except ModuleNotFoundError:
-    _deslop_qc_path = Path(__file__).with_name("deslop_qc.py")
-    _deslop_qc_spec = importlib.util.spec_from_file_location(
-        "deslop_qc", _deslop_qc_path
-    )
-    if _deslop_qc_spec is None or _deslop_qc_spec.loader is None:
-        raise
-    _deslop_qc_module = importlib.util.module_from_spec(_deslop_qc_spec)
-    _deslop_qc_spec.loader.exec_module(_deslop_qc_module)
-    analyze_deslop_qc = _deslop_qc_module.analyze_deslop_qc
-
 
 def _load_background_research(work_dir):
-    """Load the agent-authored background_research.json if present.
-
-    This file is the single highest-leverage quality input (character names,
-    relationships, plot context). It used to be documented but never read by
-    any code, so researched story knowledge never reached the writing brief.
-    """
+    """Load the agent-authored background_research.json ({} when absent)."""
     path = Path(work_dir) / "background_research.json"
     if not path.exists():
         return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        log(f"警告: background_research.json 读取失败，忽略: {exc}")
-        return {}
-    return data if isinstance(data, dict) else {}
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _clip_text(text, limit):
-    value = re.sub(r"\s+", " ", str(text or "")).strip()
-    return value[:limit]
+    """Collapse whitespace and clip. Research fields are optional, so None clips to ""."""
+    return re.sub(r"\s+", " ", str(text or "")).strip()[:limit]
 
 
 def _format_background_research(research, limit=1800):
     """Render background_research.json into a bounded Story-context brief section."""
-    if not isinstance(research, dict) or not research:
+    if not research:
         return []
     lines = [
         "## Story context (from background_research.json)",
@@ -72,50 +40,33 @@ def _format_background_research(research, limit=1800):
         if value:
             lines.append(f"- {label}: {value}")
 
-    characters = research.get("characters")
-    if isinstance(characters, dict) and characters:
+    characters = research.get("characters", {})
+    if characters:
         lines.append("- Characters:")
         for name, desc in list(characters.items())[:12]:
-            clean_name = _clip_text(name, 60)
-            clean_desc = _clip_text(desc, 160)
-            if clean_name:
-                lines.append(f"    - {clean_name}: {clean_desc}")
+            lines.append(f"    - {_clip_text(name, 60)}: {_clip_text(desc, 160)}")
 
-    details = research.get("character_details")
-    if isinstance(details, dict) and details:
+    details = research.get("character_details", {})
+    if details:
         lines.append("- Character details:")
         for name, info in list(details.items())[:8]:
-            if not isinstance(info, dict):
-                continue
             bits = []
-            aliases = info.get("aliases")
-            if isinstance(aliases, list) and aliases:
-                clean_aliases = [_clip_text(alias, 40) for alias in aliases[:4]]
-                clean_aliases = [alias for alias in clean_aliases if alias]
-                if clean_aliases:
-                    bits.append("别名 " + "/".join(clean_aliases))
+            aliases = [_clip_text(alias, 40) for alias in info.get("aliases", [])[:4]]
+            if aliases:
+                bits.append("别名 " + "/".join(aliases))
             role = _clip_text(info.get("role"), 80)
             if role:
                 bits.append(role)
-            rels = info.get("relationships")
-            if isinstance(rels, list) and rels:
-                clean_rels = [_clip_text(rel, 80) for rel in rels[:4]]
-                clean_rels = [rel for rel in clean_rels if rel]
-                if clean_rels:
-                    bits.append("；".join(clean_rels))
-            clean_name = _clip_text(name, 60)
-            if clean_name and bits:
-                lines.append(f"    - {clean_name}: {'; '.join(bits)}")
+            rels = [_clip_text(rel, 80) for rel in info.get("relationships", [])[:4]]
+            if rels:
+                bits.append("；".join(rels))
+            if bits:
+                lines.append(f"    - {_clip_text(name, 60)}: {'; '.join(bits)}")
 
-    arcs = research.get("plot_arcs")
-    if isinstance(arcs, list) and arcs:
+    arcs = research.get("plot_arcs", [])
+    if arcs:
         lines.append("- Plot arcs:")
         for arc in arcs[:8]:
-            if not isinstance(arc, dict):
-                value = _clip_text(arc, 180)
-                if value:
-                    lines.append(f"    - {value}")
-                continue
             name = _clip_text(arc.get("name"), 80)
             desc = _clip_text(arc.get("description"), 180)
             status = _clip_text(arc.get("status"), 40)
@@ -123,15 +74,10 @@ def _format_background_research(research, limit=1800):
                 tail = f" [{status}]" if status else ""
                 lines.append(f"    - {name}: {desc}{tail}".rstrip())
 
-    notes = research.get("cultural_notes")
-    if isinstance(notes, list) and notes:
+    notes = research.get("cultural_notes", [])
+    if notes:
         lines.append("- Cultural notes:")
         for note in notes[:6]:
-            if not isinstance(note, dict):
-                value = _clip_text(note, 160)
-                if value:
-                    lines.append(f"    - {value}")
-                continue
             item = _clip_text(note.get("item"), 80)
             expl = _clip_text(note.get("explanation"), 160)
             if item and expl:
@@ -150,7 +96,12 @@ def _format_background_research(research, limit=1800):
     if len(text) <= limit:
         return lines
     clipped = text[:limit].rsplit("\n", 1)[0].rstrip()
-    return [*clipped.splitlines(), "", "[Story context clipped to keep ASR/visual evidence in context]", ""]
+    return [
+        *clipped.splitlines(),
+        "",
+        "[Story context clipped to keep ASR/visual evidence in context]",
+        "",
+    ]
 
 
 def assess_understanding_substrate(
@@ -165,16 +116,9 @@ def assess_understanding_substrate(
     so it must not grade as "rich"; otherwise the sparse-substrate warning, the research
     directive, and the density relief never fire for exactly that cold-narration case.
     """
-    scenes = scenes_analysis or []
-    asr_chars = sum(len(str(seg.get("text", "")).strip()) for seg in (asr_result or []))
-    scenes_with_facts = sum(
-        1 for s in scenes if isinstance(s, dict) and s.get("frame_facts")
-    )
-    desc_lens = [
-        len(str(s.get("description", "")).strip())
-        for s in scenes
-        if isinstance(s, dict)
-    ]
+    asr_chars = sum(len(seg["text"]) for seg in asr_result)
+    scenes_with_facts = sum(1 for s in scenes_analysis if s.get("frame_facts"))
+    desc_lens = [len(s["description"]) for s in scenes_analysis]
     avg_desc = sum(desc_lens) // len(desc_lens) if desc_lens else 0
 
     has_asr = asr_chars >= 20
@@ -189,7 +133,7 @@ def assess_understanding_substrate(
     return {
         "level": level,
         "asr_chars": asr_chars,
-        "scene_count": len(scenes),
+        "scene_count": len(scenes_analysis),
         "scenes_with_frame_facts": scenes_with_facts,
         "avg_description_len": avg_desc,
         "has_story_context": bool(has_story_context),
@@ -198,7 +142,7 @@ def assess_understanding_substrate(
 
 def _format_substrate_warning(assessment):
     """Render a loud brief banner when the understanding substrate is weak."""
-    if not assessment or assessment.get("level") == "rich":
+    if assessment["level"] == "rich":
         return []
     if assessment["level"] == "empty":
         head = "⚠️ UNDERSTANDING SUBSTRATE IS EMPTY — narration will be generic guesswork unless you fix this first."
@@ -232,8 +176,8 @@ def _format_asr_chunks_for_brief(chunks, max_chunks=24):
         "",
     ]
     for chunk in chunks[:max_chunks]:
-        scene_ids = ",".join(str(sid) for sid in chunk.get("scene_ids", [])) or "n/a"
-        text = str(chunk.get("text", "")).strip()
+        scene_ids = ",".join(str(sid) for sid in chunk["scene_ids"]) or "n/a"
+        text = chunk["text"]
         if len(text) > 900:
             text = text[:897] + "..."
         lines.extend(
@@ -262,29 +206,27 @@ def _format_timeline_fusion_for_brief(fusion, max_items=40):
         "",
     ]
     for item in fusion[:max_items]:
-        start, end = item.get("time_range", [0, 0])
-        slots = item.get("narration_slots") or []
+        start, end = item["time_range"]
         slot_text = (
             ", ".join(
                 f"{slot['start']:.1f}-{slot['end']:.1f}s/{slot['char_budget']}字"
-                for slot in slots[:4]
+                for slot in item["narration_slots"][:4]
             )
             or "none"
         )
-        dialogue = item.get("dialogue_segments") or []
         dialogue_text = (
             "; ".join(
-                f"{seg['start']:.1f}-{seg['end']:.1f}s {seg.get('text', '')[:80]}"
-                for seg in dialogue[:3]
-                if seg.get("text")
+                f"{seg['start']:.1f}-{seg['end']:.1f}s {seg['text'][:80]}"
+                for seg in item["dialogue_segments"][:3]
+                if seg["text"]
             )
             or "none"
         )
         lines.extend(
             [
-                f"### Fusion scene {item.get('scene_id')}: {start:.1f}-{end:.1f}s ({item.get('recommended_mode')})",
-                f"- Visual: {item.get('visual_description', '')}",
-                f"- Dialogue overlap: {item.get('dialogue_overlap_seconds', 0):.1f}s | {dialogue_text}",
+                f"### Fusion scene {item['scene_id']}: {start:.1f}-{end:.1f}s ({item['recommended_mode']})",
+                f"- Visual: {item['visual_description']}",
+                f"- Dialogue overlap: {item['dialogue_overlap_seconds']:.1f}s | {dialogue_text}",
                 f"- Narration slots: {slot_text}",
                 "",
             ]
@@ -298,7 +240,7 @@ def _format_timeline_fusion_for_brief(fusion, max_items=40):
 
 
 def _consolidation_model():
-    return CONFIG.get("vlm_model", "")
+    return CONFIG["vlm_model"]
 
 
 def _clean_asr_prompt_fingerprint():
@@ -328,70 +270,77 @@ def _index_prompt_fingerprint():
     return hashlib.md5(prompt.encode("utf-8")).hexdigest()
 
 
-def _load_consolidation(work_dir, scenes_analysis=None):
-    """Load consolidate.py's understanding_index.json only when provenance matches VLM input."""
+def _load_consolidation(work_dir, scenes_analysis):
+    """Load consolidate.py's understanding_index.json only when its provenance matches
+    the current vlm_analysis.json, model and index prompt ({} otherwise)."""
     work_dir = Path(work_dir)
     path = work_dir / "understanding_index.json"
     meta_path = work_dir / "understanding_index.json.meta.json"
     if not path.exists() or not meta_path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+        source_md5 = hashlib.md5(
+            (work_dir / "vlm_analysis.json").read_bytes()
+        ).hexdigest()
+    except (OSError, json.JSONDecodeError):
         return {}
-    if not isinstance(data, dict) or not isinstance(meta, dict):
+    if not isinstance(meta, dict):
         return {}
-    src_path = work_dir / "vlm_analysis.json"
+    expected = {
+        "source_md5": source_md5,
+        "model": _consolidation_model(),
+        "prompt_md5": _index_prompt_fingerprint(),
+    }
+    if scenes_analysis:
+        expected["scene_count"] = len(scenes_analysis)
+    if not meta.items() >= expected.items():
+        return {}
     try:
-        source_md5 = hashlib.md5(src_path.read_bytes()).hexdigest()
-    except OSError:
+        index = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
         return {}
-    if meta.get("source_md5") != source_md5:
+    if not isinstance(index, dict) or not all(
+        isinstance(index.get(key), list)
+        for key in ("characters", "relationships", "plot_points", "entities")
+    ):
         return {}
-    expected_count = len([s for s in (scenes_analysis or []) if isinstance(s, dict)])
-    if expected_count and meta.get("scene_count") != expected_count:
+    if not all(isinstance(item, dict) for item in index["characters"]):
         return {}
-    if meta.get("model") != _consolidation_model():
+    if not all(isinstance(item, dict) for item in index["relationships"]):
         return {}
-    if meta.get("prompt_md5") != _index_prompt_fingerprint():
-        return {}
-    return data
+    return index
 
 
 def _format_consolidation(index):
-    """Render consolidate.py's understanding_index.json into a compact brief section."""
+    """Render consolidate.py's understanding_index.json into a compact brief section.
+
+    plot_points/entities items are model output and may be bare strings or objects."""
     if not index:
         return []
     lines = ["## Understanding index (from consolidate.py)", ""]
-    chars = index.get("characters") or []
+    chars = index["characters"]
     if chars:
         lines.append("- Characters:")
         for c in chars:
-            if isinstance(c, dict):
-                lines.append(
-                    f"    - {c.get('name', '?')}: {str(c.get('description', '')).strip()}"
-                )
-            else:
-                lines.append(f"    - {c}")
-    rels = index.get("relationships") or []
+            lines.append(
+                f"    - {c.get('name', '?')}: {str(c.get('description', '')).strip()}"
+            )
+    rels = index["relationships"]
     if rels:
         lines.append("- Relationships:")
         for r in rels:
-            if isinstance(r, dict):
-                lines.append(
-                    f"    - {r.get('a', '?')} — {r.get('relation', '?')} — {r.get('b', '?')}"
-                )
-            else:
-                lines.append(f"    - {r}")
-    plot = index.get("plot_points") or []
+            lines.append(
+                f"    - {r.get('a', '?')} — {r.get('relation', '?')} — {r.get('b', '?')}"
+            )
+    plot = index["plot_points"]
     if plot:
         lines.append("- Plot spine:")
         lines.extend(
             f"    {i + 1}. {p.get('text', p) if isinstance(p, dict) else p}"
             for i, p in enumerate(plot)
         )
-    ents = index.get("entities") or []
+    ents = index["entities"]
     if ents:
         ent_names = [str(e.get("name", e) if isinstance(e, dict) else e) for e in ents]
         lines.append(f"- Entities: {', '.join(ent_names)}")

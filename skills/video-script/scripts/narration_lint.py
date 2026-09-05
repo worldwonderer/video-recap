@@ -1,11 +1,13 @@
-"""Enforce narration timing, evidence, budget, and sentence-integrity rules."""
+"""Enforce narration timing, evidence, budget, and sentence-integrity rules.
 
-import importlib.util
+This is the single validator for the agent-authored narration.json: shape, numeric
+timing and text checks live here, and every later consumer trusts its result.
+"""
+
 import json
 from pathlib import Path
 
-from lib import CONFIG
-from lib import log
+from lib import CONFIG, log
 from agent_text import (
     _clean_narration_punctuation,
     _find_scene_for_midpoint,
@@ -16,23 +18,11 @@ from agent_text import (
     _text_char_count,
     _truncate_at_sentence,
 )
+from deslop_qc import analyze_deslop_qc
 from speech_ownership import (
     entry_overlaps_source_speech,
     load_source_sentence_evidence,
 )
-
-try:
-    from deslop_qc import analyze_deslop_qc
-except ModuleNotFoundError:
-    _deslop_qc_path = Path(__file__).with_name("deslop_qc.py")
-    _deslop_qc_spec = importlib.util.spec_from_file_location(
-        "deslop_qc", _deslop_qc_path
-    )
-    if _deslop_qc_spec is None or _deslop_qc_spec.loader is None:
-        raise
-    _deslop_qc_module = importlib.util.module_from_spec(_deslop_qc_spec)
-    _deslop_qc_spec.loader.exec_module(_deslop_qc_module)
-    analyze_deslop_qc = _deslop_qc_module.analyze_deslop_qc
 
 
 def _lint_issue(level, index, code, message, **extra):
@@ -41,11 +31,64 @@ def _lint_issue(level, index, code, message, **extra):
     return issue
 
 
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _visual_overlay_issues(index, seg):
+    """Shape-check the renderer handoff recap reads verbatim from a validated segment.
+
+    recap owns which overlay `type` values it actually renders and drops the rest; lint owns
+    the shape, because nothing between here and that filter re-checks it — and the filter runs
+    after TTS, so a malformed overlay caught there would already have cost a synthesis pass.
+    """
+    overlays = seg.get("visual_overlays")
+    if overlays is None:
+        return []
+    if not isinstance(overlays, list):
+        return [
+            _lint_issue(
+                "error", index, "invalid_visual_overlays", "visual_overlays must be an array"
+            )
+        ]
+    issues = []
+    for position, overlay in enumerate(overlays):
+        if not isinstance(overlay, dict):
+            issues.append(
+                _lint_issue(
+                    "error", index, "invalid_visual_overlay",
+                    "visual_overlays entries must be objects",
+                    overlay_index=position,
+                )
+            )
+            continue
+        for key in ("type", "text"):
+            value = overlay.get(key)
+            if not isinstance(value, str) or not value.strip():
+                issues.append(
+                    _lint_issue(
+                        "error", index, "invalid_visual_overlay",
+                        f"visual_overlays[].{key} must be a non-empty string",
+                        overlay_index=position,
+                    )
+                )
+        for key in ("start", "end"):
+            if key in overlay and not _is_number(overlay[key]):
+                issues.append(
+                    _lint_issue(
+                        "error", index, "invalid_visual_overlay",
+                        f"visual_overlays[].{key} must be numeric",
+                        overlay_index=position,
+                    )
+                )
+    return issues
+
+
 def _scene_bounds_for_midpoint(scenes_analysis, start, end):
-    scene = _find_scene_for_midpoint(scenes_analysis or [], start, end)
+    scene = _find_scene_for_midpoint(scenes_analysis, start, end)
     if not scene:
         return None
-    return float(scene.get("start", 0)), float(scene.get("end", 0))
+    return scene["start"], scene["end"]
 
 
 def _frame_fact_times_for_segment(scenes_analysis, start, end):
@@ -55,53 +98,38 @@ def _frame_fact_times_for_segment(scenes_analysis, start, end):
     many anchors is more likely to drift into "general story summary" instead
     of staying attached to what is on screen.
     """
-    times = []
-    scene = _find_scene_for_midpoint(scenes_analysis or [], start, end)
+    scene = _find_scene_for_midpoint(scenes_analysis, start, end)
     if not scene:
-        return times
-    for raw_ts in (scene.get("frame_facts") or {}):
-        try:
-            ts = float(raw_ts)
-        except (TypeError, ValueError):
-            continue
-        if float(start) <= ts <= float(end):
-            times.append(ts)
-    return sorted(times)
+        return []
+    return sorted(
+        ts
+        for ts in map(float, scene.get("frame_facts", {}))
+        if start <= ts <= end
+    )
+
+
+def _clip_span(clip):
+    """A validated plan clip carries source_start/source_end; a raw agent plan start/end."""
+    if "source_start" in clip:
+        return clip["source_start"], clip["source_end"]
+    return clip["start"], clip["end"]
 
 
 def _clip_matches_for_segment(seg, clip_plan):
     if not clip_plan:
         return []
-    clips = (
-        clip_plan.get("clips", clip_plan) if isinstance(clip_plan, dict) else clip_plan
-    )
-    if not isinstance(clips, list):
-        return []
-    try:
-        start = float(seg.get("start"))
-        end = float(seg.get("end"))
-    except (TypeError, ValueError):
-        return []
-    midpoint = (start + end) / 2
+    clips = clip_plan["clips"]
+    midpoint = (seg["start"] + seg["end"]) / 2
     if seg.get("source_clip_id") is not None:
         try:
-            requested = int(seg.get("source_clip_id"))
+            requested = int(seg["source_clip_id"])
         except (TypeError, ValueError):
             return []
-        return [
-            clip
-            for clip in clips
-            if clip.get("clip_id") == requested
-            and float(clip.get("source_start", clip.get("start", 0)))
-            <= midpoint
-            <= float(clip.get("source_end", clip.get("end", 0)))
-        ]
+        clips = [clip for clip in clips if clip.get("clip_id") == requested]
     return [
         clip
         for clip in clips
-        if float(clip.get("source_start", clip.get("start", 0)))
-        <= midpoint
-        <= float(clip.get("source_end", clip.get("end", 0)))
+        if _clip_span(clip)[0] <= midpoint <= _clip_span(clip)[1]
     ]
 
 
@@ -132,17 +160,13 @@ def _source_sentence_entry_issue(index, start, anchors, speech_owned):
     # already be several Chinese syllables into the next sentence.
     for anchor in anchors:
         when = anchor["time"]
-        try:
-            pause_start = float(anchor.get("pause_start", when - 0.12))
-        except (TypeError, ValueError):
-            pause_start = when - 0.12
+        pause_start = anchor.get("pause_start", when - 0.12)
         if pause_start - 0.05 <= start <= when + 0.08:
             return None
 
     suggested = next(
         (anchor for anchor in anchors if anchor["time"] > start + 0.08), None
     )
-    text_tail = str((suggested or {}).get("text_tail") or "").strip()
     return _lint_issue(
         "error",
         index,
@@ -151,16 +175,31 @@ def _source_sentence_entry_issue(index, start, anchors, speech_owned):
         "sentence-end anchor, or shorten/move/remove it when there is no later verified anchor, "
         "then rerun lint before TTS. Source sentence interruption has no override.",
         entry_time=round(start, 3),
-        suggested_start=round(float(suggested["time"]), 3) if suggested else None,
-        source_text_tail=text_tail,
-        anchor_confidence=suggested.get("confidence") if suggested else None,
+        suggested_start=round(suggested["time"], 3) if suggested else None,
+        source_text_tail=str(suggested.get("text_tail", "")).strip() if suggested else "",
+        anchor_confidence=suggested["confidence"] if suggested else None,
     )
+
+
+def _has_connected_predecessor(narration, idx, start):
+    """A back-to-back narration handoff (<=150ms gap) does not expose the source track,
+    so the next TTS block is not a new source-speech entry."""
+    for other_idx, other in enumerate(narration):
+        if other_idx == idx or not isinstance(other, dict):
+            continue
+        other_start, other_end = other.get("start"), other.get("end")
+        if not _is_number(other_start) or not _is_number(other_end):
+            continue
+        if other_start < start and -0.001 <= start - other_end <= 0.15:
+            return True
+    return False
 
 
 def lint_narration(
     narration, scenes_analysis=None, *, clip_plan=None, mode="full", work_dir=None
 ):
     """Preflight-check agent narration before TTS; write narration_lint.json when work_dir is set."""
+    scenes_analysis = scenes_analysis or []
     errors = []
     warnings = []
     normalized = []
@@ -187,10 +226,8 @@ def lint_narration(
                     )
                 )
                 continue
-            try:
-                start = float(seg.get("start"))
-                end = float(seg.get("end"))
-            except (TypeError, ValueError):
+            start, end = seg.get("start"), seg.get("end")
+            if not _is_number(start) or not _is_number(end):
                 errors.append(
                     _lint_issue(
                         "error", idx, "invalid_time", "start/end must be numeric"
@@ -198,19 +235,18 @@ def lint_narration(
                 )
                 continue
             text = str(seg.get("narration", "")).strip()
-            pause_raw = seg.get("pause_after_ms", CONFIG.get("breath_ms", 250))
             try:
-                pause = int(pause_raw)
+                pause = int(seg.get("pause_after_ms", CONFIG["breath_ms"]))
             except (TypeError, ValueError):
-                pause = CONFIG.get("breath_ms", 250)
-                warnings.append(
+                errors.append(
                     _lint_issue(
-                        "warning",
+                        "error",
                         idx,
                         "invalid_pause",
-                        "pause_after_ms is invalid; default will be used",
+                        "pause_after_ms must be an integer number of milliseconds",
                     )
                 )
+                continue
             if pause < 0:
                 warnings.append(
                     _lint_issue(
@@ -221,6 +257,7 @@ def lint_narration(
                         pause_after_ms=pause,
                     )
                 )
+            errors.extend(_visual_overlay_issues(idx, seg))
             if end <= start:
                 errors.append(
                     _lint_issue(
@@ -247,16 +284,12 @@ def lint_narration(
                 continue
 
             char_count = _text_char_count(text)
-            budget = _recommended_char_budget(start, end, pause)
+            budget = _recommended_char_budget(start, end)
             # estimate at the REAL playback rate (after the narration_speed atempo); otherwise a
             # beat sized to its 1.3x-sped slot looks "over budget" when it actually fits.
-            play_rate = max(
-                CONFIG.get("speech_rate", 3.5)
-                * float(CONFIG.get("narration_speed", 1.0) or 1.0),
-                0.1,
-            )
+            play_rate = CONFIG["speech_rate"] * CONFIG["narration_speed"]
             estimated_tts_seconds = char_count / play_rate
-            slot_seconds = _scene_available_seconds(start, end, pause)
+            slot_seconds = _scene_available_seconds(start, end)
             if budget < 5:
                 warnings.append(
                     _lint_issue(
@@ -295,27 +328,16 @@ def lint_narration(
                     )
                 )
 
-            # A back-to-back narration handoff does not expose the source track, so
-            # the next TTS block is not a new source-speech entry. Keep this strict:
-            # only authored adjacency (<=150ms) bypasses the sentence anchor gate.
-            connected_predecessor = False
-            for other_idx, other in enumerate(narration):
-                if other_idx == idx or not isinstance(other, dict):
-                    continue
-                try:
-                    other_start = float(other.get("start"))
-                    other_end = float(other.get("end"))
-                except (TypeError, ValueError):
-                    continue
-                if other_start < start and -0.001 <= start - other_end <= 0.15:
-                    connected_predecessor = True
-                    break
-            if not connected_predecessor:
+            if not _has_connected_predecessor(narration, idx, start):
                 entry_issue = _source_sentence_entry_issue(
                     idx,
                     start,
                     source_sentence_anchors,
-                    entry_overlaps_source_speech(seg, source_evidence),
+                    entry_overlaps_source_speech(
+                        start,
+                        source_evidence,
+                        authored_overlap=seg.get("overlaps_speech", True),
+                    ),
                 )
                 if entry_issue:
                     errors.append(entry_issue)
@@ -349,13 +371,9 @@ def lint_narration(
             frame_fact_times = _frame_fact_times_for_segment(
                 scenes_analysis, start, end
             )
-            max_visual_seconds = float(
-                CONFIG.get("visual_beat_max_seconds", 18.0) or 18.0
-            )
-            max_visual_facts = int(CONFIG.get("visual_beat_max_facts", 3) or 3)
-            if (end - start) > max_visual_seconds and len(
+            if (end - start) > CONFIG["visual_beat_max_seconds"] and len(
                 frame_fact_times
-            ) > max_visual_facts:
+            ) > CONFIG["visual_beat_max_facts"]:
                 warnings.append(
                     _lint_issue(
                         "warning",
@@ -394,11 +412,7 @@ def lint_narration(
                         )
                     )
                 if len(matches) == 1:
-                    clip = matches[0]
-                    clip_start = float(
-                        clip.get("source_start", clip.get("start", start))
-                    )
-                    clip_end = float(clip.get("source_end", clip.get("end", end)))
+                    clip_start, clip_end = _clip_span(matches[0])
                     if start < clip_start or end > clip_end:
                         warnings.append(
                             _lint_issue(
@@ -414,7 +428,7 @@ def lint_narration(
                         )
                 if seg.get("source_clip_id") is not None:
                     try:
-                        int(seg.get("source_clip_id"))
+                        int(seg["source_clip_id"])
                     except (TypeError, ValueError):
                         errors.append(
                             _lint_issue(
@@ -462,23 +476,15 @@ def lint_narration(
     if mode == "full" and len(sorted_segments) >= 2:
         timeline_start = 0.0
         timeline_end = sorted_segments[-1]["end"]
-        scene_ends = []
-        for scene in scenes_analysis or []:
-            try:
-                scene_ends.append(float(scene.get("end")))
-            except (AttributeError, TypeError, ValueError):
-                continue
+        scene_ends = [scene["end"] for scene in scenes_analysis]
         if scene_ends:
             timeline_end = max(timeline_end, max(scene_ends))
         span = max(0.0, timeline_end - timeline_start)
         # Score coverage at the SAME conservative rate the writer is budgeted at
         # (_recommended_char_budget uses speech_rate * speech_safety_margin * narration_speed),
         # else the metric scores ~18% stricter than its own budget and false-flags under_narrated.
-        play_rate = max(
-            CONFIG["speech_rate"]
-            * float(CONFIG.get("speech_safety_margin", 0.85) or 0.85)
-            * float(CONFIG.get("narration_speed", 1.0) or 1.0),
-            0.1,
+        play_rate = (
+            CONFIG["speech_rate"] * CONFIG["speech_safety_margin"] * CONFIG["narration_speed"]
         )
         spoken = [s["char_count"] / play_rate for s in sorted_segments]
         spoken_ends = [
@@ -501,7 +507,7 @@ def lint_narration(
                 merged_intervals.append([start, end])
         narrated_seconds = sum(end - start for start, end in merged_intervals)
         coverage = narrated_seconds / span if span > 0 else 0.0
-        orig_min = CONFIG.get("original_block_min_seconds", 2.5)
+        orig_min = CONFIG["original_block_min_seconds"]
         orig_gaps = [sorted_segments[0]["start"] - timeline_start]
         orig_gaps.extend(
             sorted_segments[i + 1]["start"] - spoken_ends[i]
@@ -510,10 +516,10 @@ def lint_narration(
         orig_gaps.append(timeline_end - spoken_ends[-1])
         original_blocks = sum(1 for g in orig_gaps if g >= orig_min)
         avg_chars = sum(s["char_count"] for s in sorted_segments) / len(sorted_segments)
-        cov_target = CONFIG.get("narration_coverage_target", 0.7)
-        cov_max = CONFIG.get("narration_coverage_max", 0.85)
-        cov_min = CONFIG.get("narration_coverage_min", 0.5)
-        block_min_chars = CONFIG.get("narration_block_min_chars", 16)
+        cov_target = CONFIG["narration_coverage_target"]
+        cov_max = CONFIG["narration_coverage_max"]
+        cov_min = CONFIG["narration_coverage_min"]
+        block_min_chars = CONFIG["narration_block_min_chars"]
         metrics = {
             "segment_count": len(sorted_segments),
             "timeline_span_seconds": round(span, 2),
@@ -575,15 +581,20 @@ def lint_narration(
                 )
             )
 
-    deslop_qc = analyze_deslop_qc(narration, work_dir=work_dir)
-    for blocker in deslop_qc.get("blockers", []):
+    deslop_qc = analyze_deslop_qc(
+        [seg for seg in narration if isinstance(seg, dict)]
+        if isinstance(narration, list)
+        else [],
+        work_dir=work_dir,
+    )
+    for blocker in deslop_qc["blockers"]:
         errors.append(
             _lint_issue(
                 "error",
-                blocker.get("index"),
-                blocker.get("code", "deslop_qc_blocker"),
-                blocker.get("message", "deslop QC objective blocker"),
-                source=blocker.get("source"),
+                blocker["index"],
+                blocker["code"],
+                blocker["message"],
+                source=blocker["source"],
                 matches=blocker.get("matches"),
                 sentence=blocker.get("sentence"),
             )
@@ -616,7 +627,7 @@ def validate_narration_or_raise(
     )
     if report["errors"]:
         sample = "; ".join(
-            f"#{e.get('index')}: {e['code']}" for e in report["errors"][:3]
+            f"#{e['index']}: {e['code']}" for e in report["errors"][:3]
         )
         raise ValueError(f"narration.json 预检失败: {sample}; 详见 narration_lint.json")
     if report["warnings"]:
@@ -629,18 +640,12 @@ def validate_narration_or_raise(
 
 
 def _validate_narration_budget(narration, scenes_analysis):
-    """Validate agent-written narration against timing budgets; trim impossible text safely."""
-    if not isinstance(narration, list):
-        raise ValueError("narration.json 必须是 JSON 数组")
-
+    """Trim lint-validated narration to its timing budgets; drop what cannot be spoken."""
+    del scenes_analysis  # scene boundaries are advisory (lint warns); authored timing is kept
     cleaned = []
     for raw in narration:
-        item = _normalise_narration_segment(raw, scenes_analysis)
-        if not item:
-            continue
-        max_chars = _recommended_char_budget(
-            item["start"], item["end"], item.get("pause_after_ms")
-        )
+        item = _normalise_narration_segment(raw)
+        max_chars = _recommended_char_budget(item["start"], item["end"])
         if max_chars < 5:
             log(f"  丢弃过短解说段 {item['start']:.1f}-{item['end']:.1f}s")
             continue

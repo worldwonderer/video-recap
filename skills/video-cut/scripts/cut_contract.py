@@ -114,14 +114,11 @@ def value_fingerprint(value):
 
 def cut_plan_fingerprint(validated_plan):
     """Hash the exact normalized clip plan that determines edited_source.mp4 bytes."""
-    if isinstance(validated_plan, dict):
-        payload = dict(validated_plan)
-        # Provenance for raw-plan freshness is not part of the edited media bytes.
-        payload.pop("raw_plan_fingerprint", None)
-        # QC is observability derived from the media plan, not an input range decision.
-        payload.pop("qc", None)
-    else:
-        payload = validated_plan
+    payload = dict(validated_plan)
+    # Provenance for raw-plan freshness is not part of the edited media bytes.
+    payload.pop("raw_plan_fingerprint", None)
+    # QC is observability derived from the media plan, not an input range decision.
+    payload.pop("qc", None)
     return value_fingerprint(payload)
 
 
@@ -169,26 +166,19 @@ def _load_edited_source_meta(output_path):
     if not meta_path.exists():
         return None
     try:
-        data = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return data if isinstance(data, dict) else None
+    return meta if isinstance(meta, dict) else None
 
 
 def _source_fingerprints_for_plan(validated_plan, input_video=None):
     """Fingerprint every media file that can affect edited_source.mp4 bytes."""
-    paths = []
-    for clip in (
-        validated_plan.get("clips", []) if isinstance(validated_plan, dict) else []
-    ):
-        if clip.get("source_path"):
-            paths.append(str(clip["source_path"]))
+    # Single-source plans carry no per-clip source_path; the CLI video is the only input.
+    paths = {clip["source_path"] for clip in validated_plan["clips"] if "source_path" in clip}
     if not paths and input_video is not None:
-        paths.append(str(input_video))
-    fingerprints = {}
-    for path in sorted(set(paths)):
-        fingerprints[str(Path(path))] = file_fingerprint(path)
-    return fingerprints
+        paths.add(str(input_video))
+    return {str(Path(path)): file_fingerprint(path) for path in sorted(paths)}
 
 
 def edited_source_render_cache_payload():
@@ -200,9 +190,7 @@ def edited_source_render_cache_payload():
     return {
         "render_algorithm_version": EDITED_SOURCE_RENDER_ALGORITHM_VERSION,
         "geometry_render_algorithm_version": GEOMETRY_RENDER_ALGORITHM_VERSION,
-        "clip_join_audio_fade_ms": round(
-            max(0.0, float(CONFIG.get("clip_join_audio_fade_ms", 30.0) or 0.0)), 3
-        ),
+        "clip_join_audio_fade_ms": round(CONFIG["clip_join_audio_fade_ms"], 3),
     }
 
 
@@ -211,38 +199,17 @@ def edited_source_render_fingerprint():
 
 
 def _write_edited_source_meta(output_path, validated_plan, input_video=None):
-    meta_path = _edited_source_meta_path(output_path)
-    source_fingerprints = _source_fingerprints_for_plan(validated_plan, input_video)
-    has_plan_sources = any(
-        clip.get("source_path")
-        for clip in (
-            validated_plan.get("clips", []) if isinstance(validated_plan, dict) else []
-        )
-    )
-    legacy_source_fp = (
-        file_fingerprint(input_video)
-        if input_video is not None
-        and not has_plan_sources
-        and len(source_fingerprints) == 1
-        else None
-    )
     meta = {
         "schema_version": 2,
         "clip_plan_fingerprint": cut_plan_fingerprint(validated_plan),
         "render_fingerprint": edited_source_render_fingerprint(),
         "render_cache": edited_source_render_cache_payload(),
-        "source_fingerprints": source_fingerprints,
+        "source_fingerprints": _source_fingerprints_for_plan(validated_plan, input_video),
         "edited_source_fingerprint": file_fingerprint(output_path),
-        "total_duration": validated_plan.get("total_duration"),
-        "clip_count": len(validated_plan.get("clips", [])),
+        "total_duration": validated_plan["total_duration"],
+        "clip_count": len(validated_plan["clips"]),
     }
-    delivery_qc = (validated_plan.get("qc") or {}).get("delivery_qc")
-    if delivery_qc:
-        meta["delivery_qc"] = delivery_qc
-    # Preserve the legacy key for existing single-source callers/tests/metadata readers.
-    if legacy_source_fp is not None:
-        meta["source_video_fingerprint"] = legacy_source_fp
-    meta_path.write_text(
+    _edited_source_meta_path(output_path).write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
@@ -253,20 +220,20 @@ def should_reuse_edited_source(output_path, validated_plan, input_video=None):
     if not output_path.exists():
         return False
     meta = _load_edited_source_meta(output_path)
-    if not meta or meta.get("clip_plan_fingerprint") != cut_plan_fingerprint(
-        validated_plan
+    if meta is None:
+        return False
+    if (
+        meta.get("clip_plan_fingerprint") != cut_plan_fingerprint(validated_plan)
+        or meta.get("render_fingerprint") != edited_source_render_fingerprint()
+        or meta.get("source_fingerprints")
+        != _source_fingerprints_for_plan(validated_plan, input_video)
     ):
         return False
-    if meta.get("render_fingerprint") != edited_source_render_fingerprint():
+    try:
+        output_fingerprint = file_fingerprint(output_path)
+    except OSError:
         return False
-    expected_sources = _source_fingerprints_for_plan(validated_plan, input_video)
-    meta_sources = meta.get("source_fingerprints")
-    if meta_sources is None and input_video is not None:
-        meta_sources = {str(Path(input_video)): meta.get("source_video_fingerprint")}
-    return bool(
-        meta_sources == expected_sources
-        and meta.get("edited_source_fingerprint") == file_fingerprint(output_path)
-    )
+    return meta.get("edited_source_fingerprint") == output_fingerprint
 
 
 def _manifest_source_entries(sources_manifest):
@@ -313,9 +280,11 @@ def normalize_sources_manifest(sources_manifest):
         if duration in (None, ""):
             duration = get_video_duration(source_path)
         try:
-            duration = max(0.0, float(duration or 0.0))
+            duration = float(duration)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"source {source_id} has invalid duration") from exc
+        if duration <= 0:
+            raise ValueError(f"source {source_id} has invalid duration")
         sources[source_id] = {
             "source_id": source_id,
             "source_path": str(source_path),
@@ -358,8 +327,8 @@ def normalize_multi_source_clip_plan(
     if not isinstance(raw_clips, list):
         raise ValueError("clip_plan.json field `clips` must be an array")
 
-    padding = max(0.0, float(clip_padding or 0.0))
-    min_duration = max(0.05, float(min_clip_duration or 0.05))
+    padding = max(0.0, clip_padding)
+    min_duration = max(0.05, min_clip_duration)
     clips = []
     source_ranges = {}
     cursor = 0.0
@@ -422,9 +391,7 @@ def normalize_multi_source_clip_plan(
     plan = {
         "clips": clips,
         "total_duration": total_duration,
-        "target_duration": round(float(target_duration), 3)
-        if target_duration
-        else None,
+        "target_duration": round(target_duration, 3) if target_duration else None,
         "sources": {
             sid: {
                 "source_path": s["source_path"],
@@ -442,7 +409,7 @@ def normalize_multi_source_clip_plan(
     if target_duration and total_duration > target_duration * 1.15:
         plan["warning"] = (
             f"validated clips total {total_duration:.1f}s exceeds target "
-            f"{float(target_duration):.1f}s by more than 15%"
+            f"{target_duration:.1f}s by more than 15%"
         )
         log(f"警告: {plan['warning']}")
     return plan
@@ -478,9 +445,8 @@ def normalize_clip_plan(
     if not isinstance(raw_clips, list):
         raise ValueError("clip_plan.json field `clips` must be an array")
 
-    video_duration = max(0.0, float(video_duration or 0.0))
-    padding = max(0.0, float(clip_padding or 0.0))
-    min_duration = max(0.05, float(min_clip_duration or 0.05))
+    padding = max(0.0, clip_padding)
+    min_duration = max(0.05, min_clip_duration)
     clips = []
     source_ranges = []
     cursor = 0.0
@@ -530,16 +496,14 @@ def normalize_clip_plan(
     plan = {
         "clips": clips,
         "total_duration": total_duration,
-        "target_duration": round(float(target_duration), 3)
-        if target_duration
-        else None,
+        "target_duration": round(target_duration, 3) if target_duration else None,
         "source_duration": round(video_duration, 3),
         "allow_overlap": bool(allow_overlap),
     }
     if target_duration and total_duration > target_duration * 1.15:
         plan["warning"] = (
             f"validated clips total {total_duration:.1f}s exceeds target "
-            f"{float(target_duration):.1f}s by more than 15%"
+            f"{target_duration:.1f}s by more than 15%"
         )
         log(f"警告: {plan['warning']}")
     return plan

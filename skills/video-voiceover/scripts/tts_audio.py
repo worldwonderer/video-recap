@@ -11,7 +11,7 @@ import sys
 import wave
 from pathlib import Path
 
-from lib import CONFIG, log
+from lib import CONFIG
 
 
 def _normalize_tts_wav_rms(input_wav, output_wav, *, target_rms_dbfs=-20.0, peak_limit=0.98):
@@ -36,10 +36,12 @@ def _normalize_tts_wav_rms(input_wav, output_wav, *, target_rms_dbfs=-20.0, peak
     # OUTPUT just to measure it) — about 420ms for a 12s block, times every narration
     # segment. Same arithmetic, same rounding, one decode.
     samples = array.array("h")
-    samples.frombytes(data[: len(data) - (len(data) % 2)])
+    samples.frombytes(data)
     if sys.byteorder != "little":  # wave data is little-endian regardless of host
         samples.byteswap()
     if not samples:
+        # A silent block has no RMS to normalize toward; copy it through with neutral
+        # metadata rather than dividing by a zero sample count.
         output_wav.write_bytes(input_wav.read_bytes())
         return {
             "rms_dbfs_before": None,
@@ -51,10 +53,10 @@ def _normalize_tts_wav_rms(input_wav, output_wav, *, target_rms_dbfs=-20.0, peak
     rms = math.sqrt(sum(s * s for s in samples) / count)
     peak = max(max(samples), -min(samples)) / 32768.0
     rms_dbfs_before = 20 * math.log10(max(rms, 1e-9) / 32768.0)
-    target_linear = 10 ** (float(target_rms_dbfs) / 20.0) * 32768.0
+    target_linear = 10 ** (target_rms_dbfs / 20.0) * 32768.0
     gain = target_linear / max(rms, 1e-9)
     if peak > 0:
-        gain = min(gain, float(peak_limit) / peak)
+        gain = min(gain, peak_limit / peak)
 
     # Accumulate the output statistics while normalizing instead of decoding the result back.
     normalized = array.array("h", bytes(2 * count))
@@ -85,28 +87,16 @@ def _normalize_tts_wav_rms(input_wav, output_wav, *, target_rms_dbfs=-20.0, peak
 
 
 def _maybe_normalize_tts_wav(output_wav):
-    """Normalize a synthesized TTS block in-place when possible.
-
-    Unit tests often stub TTS with text bytes rather than real WAV. In that case
-    normalization is skipped safely; real MiMo WAV output gets RMS/peak metadata.
-    """
-    if not CONFIG.get("tts_segment_normalize", True):
+    """Normalize a synthesized TTS block in-place; None when normalization is disabled."""
+    if not CONFIG["tts_segment_normalize"]:
         return None
     output_wav = Path(output_wav)
     tmp = output_wav.with_name(f"{output_wav.stem}_norm{output_wav.suffix}")
-    try:
-        meta = _normalize_tts_wav_rms(
-            output_wav,
-            tmp,
-            target_rms_dbfs=float(CONFIG.get("tts_segment_target_rms_dbfs", -20.0) or -20.0),
-            peak_limit=float(CONFIG.get("tts_segment_peak_limit", 0.98) or 0.98),
-        )
-        os.replace(tmp, output_wav)
-        return meta
-    except Exception as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        log(f"  TTS RMS 归一跳过: {exc}")
-        return None
+    meta = _normalize_tts_wav_rms(
+        output_wav,
+        tmp,
+        target_rms_dbfs=CONFIG["tts_segment_target_rms_dbfs"],
+        peak_limit=CONFIG["tts_segment_peak_limit"],
+    )
+    os.replace(tmp, output_wav)
+    return meta

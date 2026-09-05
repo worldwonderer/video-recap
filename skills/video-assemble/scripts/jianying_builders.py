@@ -82,8 +82,7 @@ def windowed_volume_keyframes(keyframes, seg_start_s, seg_end_s, default_gain, n
     return volume_keyframes(selected, start, new_id)
 
 
-def clip_from_segment(segment=None):
-    segment = segment or {}
+def clip_from_segment(segment):
     scale = segment.get("scale") if isinstance(segment.get("scale"), dict) else {}
     position = segment.get("position") if isinstance(segment.get("position"), dict) else {}
     flip = segment.get("flip") if isinstance(segment.get("flip"), dict) else {}
@@ -229,27 +228,12 @@ def unsupported_track_note(kind):
 
 
 RESOURCE_TRACKS = {
-    "sound": ("audios", "audio"),
-    "sticker": ("stickers", "sticker"),
-    "text_template": ("text_templates", "text"),
-    "video_effect": ("video_effects", "effect"),
-    "face_effect": ("video_effects", "effect"),
+    "sound": "audios",
+    "sticker": "stickers",
+    "text_template": "text_templates",
+    "video_effect": "video_effects",
+    "face_effect": "video_effects",
 }
-
-
-def _resource_value(config, snake_case, camel_case, default=None):
-    if snake_case in config:
-        return config[snake_case]
-    return config.get(camel_case, default)
-
-
-def _load_resource_config(config, kind):
-    if isinstance(config, str):
-        with open(config, encoding="utf-8") as source:
-            config = json.load(source)
-    if not isinstance(config, dict):
-        raise ValueError(f"{kind} resource_config must be an object")
-    return config
 
 
 def _resource_material(segment, kind, new_id):
@@ -258,19 +242,18 @@ def _resource_material(segment, kind, new_id):
     if raw is not None and config is not None:
         raise ValueError(f"{kind} segment must use either material or resource_config, not both")
     if config is not None:
-        config = _load_resource_config(config, kind)
-        raw = _resource_value(config, "main_config", "mainConfig")
-        if isinstance(raw, str):
-            raw = json.loads(raw)
+        if not isinstance(config, dict):
+            raise ValueError(f"{kind} resource_config must be an object")
+        raw = config.get("main_config")
         if not isinstance(raw, dict):
             raise ValueError(f"{kind} resource_config.main_config must be an object")
         raw = deepcopy(raw)
-        resource_id = _resource_value(config, "resource_id", "resourceId")
+        resource_id = config.get("resource_id")
         if resource_id is not None:
             raw.setdefault("resource_id", resource_id)
         if config.get("resources"):
             raw["_bundle_resources"] = deepcopy(config["resources"])
-        cover_img = _resource_value(config, "cover_img", "coverImg")
+        cover_img = config.get("cover_img")
         if kind == "sticker" and cover_img:
             raw["icon_url"] = cover_img
             raw["preview_cover_url"] = cover_img
@@ -284,7 +267,7 @@ def _resource_material(segment, kind, new_id):
 
 def build_resource_track(ctx, timeline_track):
     kind = timeline_track["kind"]
-    materials_key, _track_type = RESOURCE_TRACKS[kind]
+    materials_key = RESOURCE_TRACKS[kind]
     track_name = timeline_track.get("name", kind)
     for item in timeline_track.get("segments", []):
         ts, te = float(item["timeline_start"]), float(item["timeline_end"])
@@ -300,8 +283,6 @@ def build_resource_track(ctx, timeline_track):
         material = _resource_material(authored_item, kind, ctx.new_id)
         ctx.materials[materials_key].append(material)
         config = authored_item.get("resource_config") or {}
-        if config:
-            config = _load_resource_config(config, kind)
         if kind == "text_template":
             subordinate_resources = deepcopy(material.get("_bundle_resources", []))
             subordinate_texts = deepcopy(config.get("texts", []))
@@ -332,12 +313,10 @@ def _attachment_material(spec, kind, new_id):
     if not isinstance(spec, dict):
         raise ValueError(f"video {kind} must be an object")
     material = deepcopy(spec)
-    config = material.pop("main_config", material.pop("mainConfig", None))
+    config = material.pop("main_config", None)
     resources = material.pop("resources", None)
-    resource_id = material.pop("resourceId", None)
+    resource_id = material.pop("resource_id", None)
     if config is not None:
-        if isinstance(config, str):
-            config = json.loads(config)
         if not isinstance(config, dict):
             raise ValueError(f"video {kind}.main_config must be an object")
         merged = deepcopy(config)

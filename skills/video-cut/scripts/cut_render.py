@@ -13,25 +13,11 @@ from sentence_boundaries import _continuous_source_join
 
 
 def _audio_segment_filter(
-    label_in,
-    label_out,
-    start,
-    end,
-    duration,
-    fade_ms,
-    extra_filters="",
-    fade_in_ms=None,
-    fade_out_ms=None,
+    label_in, label_out, start, end, duration, fade_in_ms, fade_out_ms, extra_filters=""
 ):
-    max_fade = max(0.0, float(duration or 0.0)) / 2
-    fade_in = max(
-        0.0,
-        min(float(fade_ms if fade_in_ms is None else fade_in_ms) / 1000.0, max_fade),
-    )
-    fade_out = max(
-        0.0,
-        min(float(fade_ms if fade_out_ms is None else fade_out_ms) / 1000.0, max_fade),
-    )
+    max_fade = duration / 2
+    fade_in = max(0.0, min(fade_in_ms / 1000.0, max_fade))
+    fade_out = max(0.0, min(fade_out_ms / 1000.0, max_fade))
     base = f"{label_in}atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS"
     if fade_in > 0:
         base += f",afade=t=in:st=0:d={fade_in:.3f}"
@@ -57,13 +43,8 @@ def _clip_audio_edge_fades(clips, idx, fade_ms):
     return fade_in, fade_out
 
 
-def _write_filter_script(filter_complex, work_dir):
-    script_path = Path(work_dir) / "edit_filter_complex.txt"
-    script_path.write_text(filter_complex, encoding="utf-8")
-    return script_path
-
-
 def _probe_audio_sample_rate(video_path):
+    """Sample rate of the first audio stream, or None when ffprobe reports none."""
     cmd = [
         "ffprobe",
         "-v",
@@ -76,48 +57,32 @@ def _probe_audio_sample_rate(video_path):
         "csv=p=0",
         str(video_path),
     ]
-    try:
-        result = run_cmd(cmd)
-    except Exception:  # noqa: BLE001 - delivery QC is observational
+    result = run_cmd(cmd)
+    text = result.stdout.strip()
+    if result.returncode != 0 or not text:
         return None
-    if result.returncode != 0:
-        return None
-    try:
-        return int(float((result.stdout or "").strip().splitlines()[0]))
-    except (IndexError, TypeError, ValueError):
-        return None
+    return int(float(text))
 
 
 def _delivery_reencode_reason(source_paths, clips):
     reasons = ["trim_concat_filter_requires_reencode"]
-    if len(source_paths or []) > 1:
+    if len(source_paths) > 1:
         reasons.append("multi_source_geometry_audio_normalization")
-    if any(not clip.get("source_path") for clip in clips or []):
+    if any("source_path" not in clip for clip in clips):
         reasons.append("single_source_filter_concat_no_stream_copy")
     return "+".join(reasons)
 
 
-def update_delivery_qc(
-    validated_plan, *, source_paths=None, output_path=None, rendered=False
-):
+def update_delivery_qc(validated_plan, *, source_paths, output_path=None, rendered=False):
     """Attach cut delivery facts to qc.delivery_qc without writing visual_qc."""
-    qc = validated_plan.setdefault("qc", {})
-    clips = validated_plan.get("clips") or []
-    if source_paths is None:
-        source_paths = sorted(
-            {
-                str(clip.get("source_path") or "")
-                for clip in clips
-                if str(clip.get("source_path") or "")
-            }
-        )
+    qc = validated_plan["qc"]
+    clips = validated_plan["clips"]
     target_sample_rate = 48000
     probed_sample_rate = (
         _probe_audio_sample_rate(output_path)
         if output_path and Path(output_path).exists()
         else None
     )
-    output_geometry = qc.get("output_geometry")
     delivery_qc = {
         "schema_version": 1,
         "video_encode_passes": 1,
@@ -135,9 +100,9 @@ def update_delivery_qc(
             "audio encoded as AAC with 48000 Hz target for delivery compatibility",
             "edited_source.mp4 is an intermediate; downstream assembly may perform another intentional encode",
         ],
-        "output_geometry": output_geometry,
-        "rendered": bool(rendered),
-        "planned": not bool(rendered),
+        "output_geometry": qc["output_geometry"],
+        "rendered": rendered,
+        "planned": not rendered,
     }
     if probed_sample_rate and probed_sample_rate != target_sample_rate:
         delivery_qc["final_compat_notes"].append(
@@ -148,12 +113,10 @@ def update_delivery_qc(
 
 
 def write_cut_delivery_qc(work_dir, validated_plan):
-    delivery_qc = (validated_plan.get("qc") or {}).get("delivery_qc")
-    if not delivery_qc or not delivery_qc.get("rendered"):
-        return None
     path = Path(work_dir) / "cut_delivery_qc.json"
     path.write_text(
-        json.dumps(delivery_qc, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(validated_plan["qc"]["delivery_qc"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     return path
 
@@ -163,23 +126,21 @@ def build_edited_source_video(input_video, validated_plan, work_dir, output_path
     work_dir = Path(work_dir)
     output_path = Path(output_path or work_dir / "edited_source.mp4")
     clips = validated_plan["clips"]
-    if not clips:
-        raise ValueError("validated clip plan has no clips")
 
     source_paths = []
     for clip in clips:
-        source_path = str(clip.get("source_path") or input_video)
+        source_path = clip.get("source_path", str(input_video))
         if source_path not in source_paths:
             source_paths.append(source_path)
     source_index = {path: idx for idx, path in enumerate(source_paths)}
     audio_by_input = {path: _has_audio_stream(path) for path in source_paths}
-    join_fade_ms = max(0.0, float(CONFIG.get("clip_join_audio_fade_ms", 30.0) or 0.0))
+    join_fade_ms = CONFIG["clip_join_audio_fade_ms"]
     qc = validated_plan.setdefault("qc", {})
     qc["join_fade_ms"] = round(join_fade_ms, 3)
-    if not qc.get("output_geometry"):
+    if "output_geometry" not in qc:
         _, _, _, geometry_qc = _select_output_geometry(source_paths, clips)
         qc["output_geometry"] = geometry_qc
-        qc["output_geometry_reason"] = geometry_qc.get("reason")
+        qc["output_geometry_reason"] = geometry_qc["reason"]
 
     parts = []
     concat_inputs = []
@@ -190,23 +151,12 @@ def build_edited_source_video(input_video, validated_plan, work_dir, output_path
         # segment to one canvas and give every clip an audio segment (real or synthesized
         # silence) so concat always succeeds with a continuous track and no source's audio
         # is dropped just because a sibling source is silent.
-        # Reuse the geometry already probed+stored above (guard) or by main() — the
-        # selection is deterministic, so re-probing every source here is wasted ffprobe work.
-        geometry_qc = qc.get("output_geometry")
-        if isinstance(geometry_qc, dict) and all(
-            geometry_qc.get(k) for k in ("width", "height", "fps")
-        ):
-            canvas_w, canvas_h, canvas_fps = (
-                int(geometry_qc["width"]),
-                int(geometry_qc["height"]),
-                geometry_qc["fps"],
-            )
-        else:
-            canvas_w, canvas_h, canvas_fps, geometry_qc = _select_output_geometry(
-                source_paths, clips
-            )
-            qc["output_geometry"] = geometry_qc
-            qc["output_geometry_reason"] = geometry_qc.get("reason")
+        geometry_qc = qc["output_geometry"]
+        canvas_w, canvas_h, canvas_fps = (
+            geometry_qc["width"],
+            geometry_qc["height"],
+            geometry_qc["fps"],
+        )
         vnorm = (
             f"scale={canvas_w}:{canvas_h}:force_original_aspect_ratio=decrease,"
             f"pad={canvas_w}:{canvas_h}:(ow-iw)/2:(oh-ih)/2,setsar=1,"
@@ -214,18 +164,16 @@ def build_edited_source_video(input_video, validated_plan, work_dir, output_path
         )
         for clip_pos, clip in enumerate(clips):
             idx = clip["clip_id"]
-            clip_source = str(clip.get("source_path") or input_video)
+            clip_source = clip.get("source_path", str(input_video))
             input_idx = source_index[clip_source]
             start = clip["source_start"]
             end = clip["source_end"]
-            dur = max(0.0, float(end) - float(start))
-            fade_in_ms, fade_out_ms = _clip_audio_edge_fades(
-                clips, clip_pos, join_fade_ms
-            )
+            dur = end - start
+            fade_in_ms, fade_out_ms = _clip_audio_edge_fades(clips, clip_pos, join_fade_ms)
             parts.append(
                 f"[{input_idx}:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,{vnorm}[v{idx}]"
             )
-            if audio_by_input.get(clip_source):
+            if audio_by_input[clip_source]:
                 parts.append(
                     _audio_segment_filter(
                         f"[{input_idx}:a]",
@@ -233,10 +181,9 @@ def build_edited_source_video(input_video, validated_plan, work_dir, output_path
                         start,
                         end,
                         dur,
-                        join_fade_ms,
+                        fade_in_ms,
+                        fade_out_ms,
                         extra_filters="aresample=48000,aformat=sample_rates=48000:channel_layouts=stereo",
-                        fade_in_ms=fade_in_ms,
-                        fade_out_ms=fade_out_ms,
                     )
                 )
             else:
@@ -251,7 +198,7 @@ def build_edited_source_video(input_video, validated_plan, work_dir, output_path
         has_audio = all(audio_by_input.values())
         for clip_pos, clip in enumerate(clips):
             idx = clip["clip_id"]
-            input_idx = source_index[str(clip.get("source_path") or input_video)]
+            input_idx = source_index[clip.get("source_path", str(input_video))]
             start = clip["source_start"]
             end = clip["source_end"]
             parts.append(
@@ -268,10 +215,9 @@ def build_edited_source_video(input_video, validated_plan, work_dir, output_path
                         f"[a{idx}]",
                         start,
                         end,
-                        max(0.0, float(end) - float(start)),
-                        join_fade_ms,
-                        fade_in_ms=fade_in_ms,
-                        fade_out_ms=fade_out_ms,
+                        end - start,
+                        fade_in_ms,
+                        fade_out_ms,
                     )
                 )
                 concat_inputs.append(f"[a{idx}]")
@@ -282,23 +228,21 @@ def build_edited_source_video(input_video, validated_plan, work_dir, output_path
             )
             maps = ["-map", "[v]", "-map", "[a]"]
         else:
-            total = validated_plan.get("total_duration") or sum(
-                c["duration"] for c in clips
-            )
             parts.append("".join(concat_inputs) + f"concat=n={len(clips)}:v=1:a=0[v]")
             maps = ["-map", "[v]", "-map", f"{len(source_paths)}:a", "-shortest"]
             extra_inputs = [
                 "-f",
                 "lavfi",
                 "-t",
-                f"{float(total):.3f}",
+                f"{validated_plan['total_duration']:.3f}",
                 "-i",
                 "anullsrc=channel_layout=stereo:sample_rate=48000",
             ]
 
     filter_complex = ";".join(parts)
     if len(filter_complex.encode("utf-8")) > 7000:
-        filter_script = _write_filter_script(filter_complex, work_dir)
+        filter_script = work_dir / "edit_filter_complex.txt"
+        filter_script.write_text(filter_complex, encoding="utf-8")
         filter_args = ["-filter_complex_script", str(filter_script)]
     else:
         filter_args = ["-filter_complex", filter_complex]

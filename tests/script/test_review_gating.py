@@ -2,10 +2,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(
-    0, str(Path(__file__).resolve().parents[2] / "skills" / "video-script" / "scripts")
+    0, str(Path(__file__).resolve().parents[2] / "skills" / "video-recap" / "scripts")
 )
 sys.path.insert(
-    0, str(Path(__file__).resolve().parents[2] / "skills" / "video-recap" / "scripts")
+    0, str(Path(__file__).resolve().parents[2] / "skills" / "video-script" / "scripts")
 )
 import json
 

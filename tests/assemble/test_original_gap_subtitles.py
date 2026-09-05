@@ -22,12 +22,9 @@ def _burn_on(monkeypatch):
     monkeypatch.setitem(CONFIG, "subtitle_original_in_gaps", True)
 
 
-def test_load_original_asr_filters_bad_entries(tmp_path):
+def test_load_original_asr_reads_canonical_entries(tmp_path):
     (tmp_path / "asr_result.json").write_text(json.dumps([
         {"start": 1.0, "end": 2.0, "text": "你好"},
-        {"start": 2.0, "end": 2.0, "text": "零长度"},   # dropped: end <= start
-        {"start": 3.0, "end": 4.0, "text": "   "},       # dropped: empty text
-        "not-a-dict",                                     # dropped
     ]), encoding="utf-8")
     assert source_subtitles._load_original_asr(tmp_path) == [{"start": 1.0, "end": 2.0, "text": "你好"}]
 
@@ -36,23 +33,23 @@ def test_load_original_asr_absent(tmp_path):
     assert source_subtitles._load_original_asr(tmp_path) == []
 
 
-def test_output_clip_spans_none_in_full_mode(tmp_path):
-    assert source_subtitles._output_clip_spans(tmp_path) is None
+def test_plan_clip_spans_none_in_full_mode(tmp_path):
+    assert source_subtitles._plan_clip_spans(tmp_path) is None
 
 
-def test_output_clip_spans_from_validated_plan(tmp_path):
+def test_plan_clip_spans_from_validated_plan(tmp_path):
     (tmp_path / "clip_plan_validated.json").write_text(json.dumps({"clips": [
         {"source_start": 10.0, "source_end": 20.0, "output_start": 0.0, "output_end": 10.0},
         {"source_start": 50.0, "source_end": 56.0, "output_start": 10.0, "output_end": 16.0},
     ]}), encoding="utf-8")
-    spans = source_subtitles._output_clip_spans(tmp_path)
+    spans = source_subtitles._plan_clip_spans(tmp_path)
     assert spans[0]["source_start"] == 10.0 and spans[0]["output_start"] == 0.0
     assert spans[1]["source_start"] == 50.0 and spans[1]["output_end"] == 16.0
 
 
 
 
-def test_output_clip_spans_ignore_stale_validated_plan(tmp_path):
+def test_plan_clip_spans_ignore_stale_validated_plan(tmp_path):
     raw = {"clips": [{"start": 40.0, "end": 45.0}]}
     (tmp_path / "clip_plan.json").write_text(json.dumps(raw), encoding="utf-8")
     (tmp_path / "clip_plan_validated.json").write_text(json.dumps({
@@ -60,9 +57,15 @@ def test_output_clip_spans_ignore_stale_validated_plan(tmp_path):
         "clips": [{"source_start": 0.0, "source_end": 10.0, "output_start": 0.0, "output_end": 10.0}],
     }), encoding="utf-8")
 
-    spans = source_subtitles._output_clip_spans(tmp_path)
+    spans = source_subtitles._plan_clip_spans(tmp_path)
 
-    assert spans == [{"source_start": 40.0, "source_end": 45.0, "output_start": 0.0, "output_end": 5.0}]
+    assert spans == [{
+        "source_start": 40.0,
+        "source_end": 45.0,
+        "output_start": 0.0,
+        "output_end": 5.0,
+        "entry": {"start": 40.0, "end": 45.0},
+    }]
 
 def test_map_asr_identity_in_full_mode():
     asr = [{"start": 1.0, "end": 2.0, "text": "x"}]
@@ -195,19 +198,15 @@ def test_combined_entries_sorted_no_overlap_with_narration(monkeypatch, tmp_path
             assert e["end"] <= 5.0 + 1e-6
 
 
-def test_generate_ass_includes_original_only_with_duration(monkeypatch, tmp_path):
+def test_generate_ass_includes_original_gap_subtitles(monkeypatch, tmp_path):
     _burn_on(monkeypatch)
     (tmp_path / "asr_result.json").write_text(
         json.dumps([{"start": 1.0, "end": 4.0, "text": "原声台词"}]), encoding="utf-8")
     segs = [{"actual_place_start": 5.0, "actual_place_end": 8.0, "narration": "解说",
              "start": 5.0, "end": 8.0}]
-    subtitle_render._generate_ass(segs, tmp_path, 10.0)
+    subtitle_render._generate_ass(segs, tmp_path, 10.0, {"width": 1280, "height": 720})
     ass = (tmp_path / "subtitles.ass").read_text(encoding="utf-8")
     assert "原声台词" in ass and "解说" in ass
-    # backward compatible: no video_duration -> narration only, no original gap subs
-    subtitle_render._generate_ass(segs, tmp_path)
-    ass2 = (tmp_path / "subtitles.ass").read_text(encoding="utf-8")
-    assert "原声台词" not in ass2 and "解说" in ass2
 
 
 def test_original_line_assigned_to_single_gap_by_midpoint(monkeypatch, tmp_path):
@@ -307,15 +306,14 @@ def test_normalize_subtitle_text_collapses_em_dashes():
     assert subtitle_core._normalize_subtitle_text("一———二") == "一，二"  # any dash run collapses to one comma
     assert subtitle_core._normalize_subtitle_text("已经，——好") == "已经，好"  # no double comma
     assert subtitle_core._normalize_subtitle_text("") == ""
-    assert subtitle_core._normalize_subtitle_text(None) == ""
 
 
 def test_generated_srt_and_ass_normalize_em_dashes(monkeypatch, tmp_path):
     # narration text with a dash is normalized in BOTH generated srt and ass burned text
     segs = [{"actual_place_start": 1.0, "actual_place_end": 4.0,
              "narration": "我回来了——这一次", "start": 1.0, "end": 4.0}]
-    subtitle_render._generate_srt(segs, tmp_path)
-    subtitle_render._generate_ass(segs, tmp_path)
+    subtitle_render._generate_srt(segs, tmp_path, 4.0)
+    subtitle_render._generate_ass(segs, tmp_path, 4.0, {"width": 1280, "height": 720})
     srt = (tmp_path / "subtitles.srt").read_text(encoding="utf-8")
     ass = (tmp_path / "subtitles.ass").read_text(encoding="utf-8")
     assert "——" not in srt and "—" not in srt
@@ -330,7 +328,7 @@ def test_original_gap_text_normalizes_em_dashes(monkeypatch, tmp_path):
         json.dumps([{"start": 1.0, "end": 4.0, "text": "活着——让我看看"}]), encoding="utf-8")
     segs = [{"actual_place_start": 5.0, "actual_place_end": 8.0, "narration": "解说",
              "start": 5.0, "end": 8.0}]
-    subtitle_render._generate_ass(segs, tmp_path, 10.0)
+    subtitle_render._generate_ass(segs, tmp_path, 10.0, {"width": 1280, "height": 720})
     ass = (tmp_path / "subtitles.ass").read_text(encoding="utf-8")
     assert "——" not in ass and "—" not in ass
     assert "活着，让我看看" in ass
@@ -389,18 +387,20 @@ def test_user_srt_default_source_time_remapped(monkeypatch, tmp_path):
     assert all(2.0 <= e["start"] and e["end"] <= 5.0 + 1e-6 for e in entries)
 
 
-def test_user_subtitles_malformed_falls_back_no_crash(monkeypatch, tmp_path):
+def test_user_subtitles_malformed_is_reported(monkeypatch, tmp_path):
     _burn_on(monkeypatch)
-    # garbage user json must not crash and must fall back to the agent file
+    # An explicitly supplied user artifact must not be silently ignored in favor of a fallback.
     (tmp_path / "user_subtitles.json").write_text("{ this is not json", encoding="utf-8")
     (tmp_path / "original_subtitles.json").write_text(
         json.dumps([{"start": 1.0, "end": 4.0, "text": "代理兜底"}]), encoding="utf-8")
     segs = [{"actual_place_start": 5.0, "actual_place_end": 8.0, "narration": "解说"}]
-    joined = "".join(e["text"] for e in source_subtitles._original_gap_subtitle_entries(segs, tmp_path, 10.0))
-    assert "代理兜底" in joined
-    # an empty list is also malformed-ish → returns None and falls through the ladder
+    import pytest
+    with pytest.raises(ValueError, match="不是合法 JSON"):
+        source_subtitles._original_gap_subtitle_entries(segs, tmp_path, 10.0)
+
+    # An empty but valid user file is authoritative and intentionally emits no original subtitles.
     (tmp_path / "user_subtitles.json").write_text("[]", encoding="utf-8")
-    assert source_subtitles._load_user_original_subtitles(tmp_path) is None
+    assert source_subtitles._load_user_original_subtitles(tmp_path) == []
 
 
 def test_user_subtitles_absent_returns_none(tmp_path):

@@ -10,62 +10,50 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from lib import (
-    CONFIG,
-    DEFAULT_FISH_TTS_API_URL,
-    DEFAULT_FISH_TTS_MODEL,
-    _sanitize_api_error,
-)
+from lib import CONFIG, _sanitize_api_error
 
 
-def _fish_payload(text, rate="+0%"):
-    try:
-        speed = 1.0 + float(str(rate).rstrip("%")) / 100.0
-    except (TypeError, ValueError):
-        speed = 1.0
+def _fish_payload(text, rate):
     payload = {
         "text": text,
         "format": "wav",
         "normalize": True,
         "prosody": {
-            "speed": max(0.5, min(2.0, speed)),
+            "speed": 1.0 + float(rate.rstrip("%")) / 100.0,
             "volume": 0,
             "normalize_loudness": True,
         },
     }
-    reference_id = str(CONFIG.get("fish_tts_reference_id") or "").strip()
+    reference_id = CONFIG["fish_tts_reference_id"]
     if reference_id:
         payload["reference_id"] = reference_id
     return payload
 
 
-def synthesize_fish_audio(text, output_path, rate="+0%", **_ignored):
+def synthesize_fish_audio(text, output_path, rate="+0%"):
     """Synthesize one narration block and atomically write the WAV response."""
-    api_key = str(CONFIG.get("fish_api_key") or "").strip()
+    api_key = CONFIG["fish_api_key"]
     if not api_key:
         raise RuntimeError("请设置 FISH_API_KEY 用于 Fish Audio TTS")
 
-    endpoint = str(CONFIG.get("fish_tts_api_url") or DEFAULT_FISH_TTS_API_URL)
-    model = str(CONFIG.get("fish_tts_model") or DEFAULT_FISH_TTS_MODEL)
     body = json.dumps(_fish_payload(text, rate), ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
-        endpoint,
+        CONFIG["fish_tts_api_url"],
         data=body,
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "audio/wav",
-            "model": model,
+            "model": CONFIG["fish_tts_model"],
             "User-Agent": "video-recap/1.0",
         },
         method="POST",
     )
 
-    timeout = max(1, int(CONFIG.get("tts_timeout", 300) or 300))
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=CONFIG["tts_timeout"]) as response:
             audio = response.read()
-            content_type = str(response.headers.get("Content-Type") or "").lower()
+            content_type = response.headers.get("Content-Type", "").lower()
     except urllib.error.HTTPError as exc:
         detail = _sanitize_api_error(
             exc.read().decode("utf-8", errors="replace"),
@@ -99,11 +87,5 @@ def synthesize_fish_audio(text, output_path, rate="+0%", **_ignored):
 
     output = Path(output_path)
     partial = Path(str(output) + ".part")
-    try:
-        partial.write_bytes(audio)
-        os.replace(partial, output)
-    finally:
-        try:
-            partial.unlink(missing_ok=True)
-        except OSError:
-            pass
+    partial.write_bytes(audio)
+    os.replace(partial, output)

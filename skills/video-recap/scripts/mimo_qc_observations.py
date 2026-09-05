@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-
 import json
-
-
 import re
-
-
 from typing import Any
 from collections.abc import Mapping
 
 import qc_contract
-
-from mimo_qc_evidence import _fingerprint_value, _redact, _summarize, safe_mimo_config
+from mimo_qc_evidence import _fingerprint_value, _summarize, safe_mimo_config
 from mimo_qc_payload import _strip_json_fence
 from mimo_qc_contract import (
     ARTIFACT_NAME,
@@ -25,11 +19,11 @@ from mimo_qc_contract import (
 
 
 def _extract_observations(model_output: Any) -> list[Mapping[str, Any]]:
-    model_output = _redact(model_output)
+    """Bound whatever shape the model (or an offline fixture) returned to observation dicts."""
     if isinstance(model_output, str):
         try:
             model_output = json.loads(_strip_json_fence(model_output))
-        except (TypeError, ValueError):
+        except ValueError:
             return [
                 {
                     "code": "freeform_observation",
@@ -48,10 +42,9 @@ def _extract_observations(model_output: Any) -> list[Mapping[str, Any]]:
             return [item for item in model_output[key] if isinstance(item, Mapping)][
                 :MAX_OBSERVATIONS
             ]
-    try:
+    if "choices" in model_output:  # a raw chat-completion response saved as a fixture
         return _extract_observations(model_output["choices"][0]["message"]["content"])
-    except (KeyError, IndexError, TypeError):
-        return [model_output] if model_output else []
+    return [model_output] if model_output else []
 
 
 def _norm_choice(raw: Any, allowed: set[str], default: str) -> str:
@@ -60,15 +53,10 @@ def _norm_choice(raw: Any, allowed: set[str], default: str) -> str:
 
 
 def _caption_match_text(value: Any) -> str:
-    return re.sub(r"[^0-9A-Za-z\u3400-\u9fff]+", "", str(value or "")).lower()
+    return re.sub(r"[^0-9A-Za-z㐀-鿿]+", "", str(value or "")).lower()
 
 
 def _generated_subtitle_corpus(payload: Mapping[str, Any]) -> str:
-    group = (
-        (payload.get("evidence") or {}).get("generated_subtitles")
-        if isinstance(payload.get("evidence"), Mapping)
-        else None
-    )
     strings = []
 
     def visit(value: Any) -> None:
@@ -81,7 +69,7 @@ def _generated_subtitle_corpus(payload: Mapping[str, Any]) -> str:
             for child in value:
                 visit(child)
 
-    visit(group or {})
+    visit(payload["evidence"]["generated_subtitles"])
     return _caption_match_text(" ".join(strings))
 
 
@@ -118,21 +106,18 @@ def _misclassified_generated_caption(
 def normalize_observations(
     model_output: Any,
     *,
+    payload: Mapping[str, Any],
     stage: str = DEFAULT_STAGE,
-    payload: Mapping[str, Any] | None = None,
     model_config: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Normalize bounded model output into permanently non-blocking findings."""
-    payload = _redact(payload or {})
     cfg = safe_mimo_config(model_config)
-    model_used = str(cfg.get("model") or "mimo-qc-offline-fixture")
+    model_used = cfg["model"]
     findings = []
     for index, observation in enumerate(_extract_observations(model_output), start=1):
         if _misclassified_generated_caption(observation, payload, stage):
             continue
         obs = _summarize(observation, max_items=10, max_string=MAX_MESSAGE_CHARS)
-        if not isinstance(obs, Mapping):
-            continue
         category_hint = str(
             obs.get("category") or obs.get("type") or "semantic"
         ).lower()
@@ -157,18 +142,16 @@ def normalize_observations(
             "aesthetic" if category == "mimo_aesthetic" else "semantic",
         )
         raw_evidence = obs.get("evidence")
-        supplied_evidence: Mapping[str, Any] = (
-            raw_evidence if isinstance(raw_evidence, Mapping) else {}
-        )
         evidence = {
-            **dict(supplied_evidence),
+            **(raw_evidence if isinstance(raw_evidence, Mapping) else {}),
             "model": model_used,
             "config": cfg,
             "fingerprint": {
-                "evidence": payload.get("evidence_fingerprint"),
+                "evidence": payload["evidence_fingerprint"],
                 "observation": _fingerprint_value(observation),
             },
         }
+        location = obs.get("location")
         findings.append(
             qc_contract.build_finding(
                 finding_id=str(
@@ -186,14 +169,12 @@ def normalize_observations(
                 deterministic=False,
                 blocking=False,
                 source={"artifact": ARTIFACT_NAME, "adapter": "mimo_qc.py"},
-                location=obs.get("location")
-                if isinstance(obs.get("location"), Mapping)
-                else {},
-                evidence=_redact(evidence),
+                location=location if isinstance(location, Mapping) else {},
+                evidence=evidence,
                 model_used=model_used,
                 artifact_fingerprints={
-                    "payload": str(payload.get("payload_fingerprint") or "fixture"),
-                    "evidence": str(payload.get("evidence_fingerprint") or "fixture"),
+                    "payload": payload["payload_fingerprint"],
+                    "evidence": payload["evidence_fingerprint"],
                 },
                 next_action="human_review",
                 decision_reason=message,

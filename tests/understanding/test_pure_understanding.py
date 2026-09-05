@@ -64,7 +64,7 @@ def test_normalize_api_url_accepts_base_or_full_endpoint():
     )
 
 
-def test_mimo_token_plan_key_defaults_to_token_plan_cn_base():
+def test_mimo_token_plan_key_uses_an_explicit_cluster(monkeypatch):
     assert (
         default_mimo_api_url("tp-example") == "https://token-plan-cn.xiaomimimo.com/v1"
     )
@@ -72,27 +72,34 @@ def test_mimo_token_plan_key_defaults_to_token_plan_cn_base():
         default_mimo_api_url("tp-example", cluster="sgp")
         == "https://token-plan-sgp.xiaomimimo.com/v1"
     )
-    assert (
-        default_mimo_api_url("tp-example", cluster="unknown")
-        == "https://token-plan-cn.xiaomimimo.com/v1"
-    )
     assert default_mimo_api_url("sk-example") == "https://api.xiaomimimo.com/v1"
 
+    monkeypatch.setenv("MIMO_TOKEN_PLAN_CLUSTER", "unknown")
+    with pytest.raises(ValueError, match="token-plan cluster.*unknown"):
+        default_mimo_api_url("tp-example")
 
-def test_env_int_bool_and_float_helpers_tolerate_bad_values(monkeypatch):
+
+def test_env_int_and_float_helpers_reject_bad_values(monkeypatch):
     monkeypatch.setenv("BAD_INT", "not-an-int")
     monkeypatch.setenv("LOW_INT", "-3")
     monkeypatch.setenv("YES_BOOL", "on")
     monkeypatch.setenv("NO_BOOL", "0")
     monkeypatch.setenv("BAD_FLOAT", "nope")
     monkeypatch.setenv("LOW_FLOAT", "-1.5")
+    monkeypatch.setenv("NONFINITE_FLOAT", "nan")
 
-    assert env_int("BAD_INT", 8, minimum=1) == 8
-    assert env_int("LOW_INT", 8, minimum=1) == 1
+    with pytest.raises(ValueError, match="BAD_INT.*not-an-int"):
+        env_int("BAD_INT", 8, minimum=1)
+    with pytest.raises(ValueError, match="LOW_INT.*>= 1.*-3"):
+        env_int("LOW_INT", 8, minimum=1)
     assert env_bool("YES_BOOL") is True
     assert env_bool("NO_BOOL", default=True) is False
-    assert env_float("BAD_FLOAT", 0.5, minimum=0) == 0.5
-    assert env_float("LOW_FLOAT", 0.5, minimum=0) == 0
+    with pytest.raises(ValueError, match="BAD_FLOAT.*nope"):
+        env_float("BAD_FLOAT", 0.5, minimum=0)
+    with pytest.raises(ValueError, match="LOW_FLOAT.*>= 0.*-1.5"):
+        env_float("LOW_FLOAT", 0.5, minimum=0)
+    with pytest.raises(ValueError, match="NONFINITE_FLOAT.*finite.*nan"):
+        env_float("NONFINITE_FLOAT", 0.5, minimum=0)
 
 
 def test_detect_scenes_respects_zero_threshold(monkeypatch, tmp_path):
