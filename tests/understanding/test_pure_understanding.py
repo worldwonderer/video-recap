@@ -26,6 +26,7 @@ from lib import (
     env_int,
     file_fingerprint,
     get_video_duration,
+    is_mimo_token_plan_key,
     normalize_api_url,
     step_cache_key,
 )
@@ -65,18 +66,21 @@ def test_normalize_api_url_accepts_base_or_full_endpoint():
 
 
 def test_mimo_token_plan_key_uses_an_explicit_cluster(monkeypatch):
+    # The credential is classified here and never handed to the URL builder, so no
+    # secret flows into a value that doctor.py prints.
+    assert is_mimo_token_plan_key("tp-example") is True
+    assert is_mimo_token_plan_key("sk-example") is False
+
+    assert default_mimo_api_url(True) == "https://token-plan-cn.xiaomimimo.com/v1"
     assert (
-        default_mimo_api_url("tp-example") == "https://token-plan-cn.xiaomimimo.com/v1"
-    )
-    assert (
-        default_mimo_api_url("tp-example", cluster="sgp")
+        default_mimo_api_url(True, cluster="sgp")
         == "https://token-plan-sgp.xiaomimimo.com/v1"
     )
-    assert default_mimo_api_url("sk-example") == "https://api.xiaomimimo.com/v1"
+    assert default_mimo_api_url(False) == "https://api.xiaomimimo.com/v1"
 
     monkeypatch.setenv("MIMO_TOKEN_PLAN_CLUSTER", "unknown")
     with pytest.raises(ValueError, match="token-plan cluster.*unknown"):
-        default_mimo_api_url("tp-example")
+        default_mimo_api_url(True)
 
 
 def test_env_int_and_float_helpers_reject_bad_values(monkeypatch):

@@ -37,14 +37,17 @@ def is_mimo_token_plan_key(api_key):
     return api_key.startswith("tp-")
 
 
-def default_mimo_api_url(api_key):
+def default_mimo_api_url(is_token_plan):
     """Pick the correct MiMo base URL for pay-as-you-go vs Token Plan keys.
 
     MiMo uses independent credentials for pay-as-you-go (`sk-*`) and Token Plan
     (`tp-*`). Token Plan keys must be sent to the Token Plan cluster base URL,
     not the pay-as-you-go `api.xiaomimimo.com` endpoint.
+
+    The caller classifies its own key with `is_mimo_token_plan_key` and passes only
+    that bit: a credential never reaches a function whose return value is logged.
     """
-    if not is_mimo_token_plan_key(api_key):
+    if not is_token_plan:
         return DEFAULT_MIMO_API_URL
     cluster = (os.environ.get("MIMO_TOKEN_PLAN_CLUSTER") or DEFAULT_MIMO_TOKEN_PLAN_CLUSTER).strip().lower()
     if cluster not in MIMO_TOKEN_PLAN_API_URLS:
@@ -88,21 +91,21 @@ _mimo_api_key = os.environ.get("MIMO_API_KEY", "")
 _mimo_video_api_key = os.environ.get("MIMO_VIDEO_API_KEY", "") or _mimo_api_key
 _mimo_tts_api_key = os.environ.get("MIMO_TTS_API_KEY", "") or _mimo_api_key
 _mimo_asr_api_key = os.environ.get("MIMO_ASR_API_KEY", "") or _mimo_api_key
-_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(_mimo_api_key)
+_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(is_mimo_token_plan_key(_mimo_api_key))
 _raw_mimo_video_api_url = (
     os.environ.get("MIMO_VIDEO_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_video_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_video_api_key))
 )
 _raw_mimo_tts_api_url = (
     os.environ.get("MIMO_TTS_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_tts_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_tts_api_key))
 )
 _raw_mimo_asr_api_url = (
     os.environ.get("MIMO_ASR_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_asr_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_asr_api_key))
 )
 
 CONFIG = {

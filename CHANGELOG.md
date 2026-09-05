@@ -22,6 +22,10 @@ All notable changes to this project are documented here.
 - **`narration.json` 的 `visual_overlays` 现在会被 lint 校验。** 此前它是唯一没有校验器覆盖的 agent 手写字段：缺 `type` / `text` 的 overlay 能通过 lint，却让 recap 编排器在 TTS 跑完之后才以 `KeyError` 崩溃。校验前移到 TTS 之前，崩溃变成可读的 lint error。
 - **静音 TTS 块不再中断配音。** 零帧 WAV 会原样透传并返回中性的响度元数据，不再因除以零样本数而抛 `ZeroDivisionError`。
 
+### Security
+
+- **凭证不再传入只需要一个判断位的 URL 构造函数。** `default_mimo_api_url` 改为接收 `is_token_plan` 布尔值，由调用方先用 `is_mimo_token_plan_key` 归类；它的返回值会被 `doctor.py` 打印，因此密钥本身不应流入。解析出的 URL 行为不变。
+
 ## [0.4.0] - 2026-07-27
 
 汇总 `v0.3.3` 之后的全部工作：多源剪辑、QC、字幕与配音改进，可携带剪映草稿能力，内容驱动的创作流程，以及一轮深度审查带来的正确性、性能与配置面修复。
