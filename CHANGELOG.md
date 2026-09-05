@@ -10,6 +10,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-05
+
+以「在边界校验一次，之后信任契约」为原则的一次全量瘦身：删除约 2,600 行防御式代码，把校验集中到真正的输入边界，并修复审查过程中发现的三处真实缺陷。行为收紧之处见 `Changed`。
+
 ### Changed
 
 - **技能脚本改为在边界校验一次，之后信任契约。** 各 skill 内部大量 `.get(key, default)`、`isinstance(...)` 兜底与 `try/except` 被移除：由本 skill 自己写出的产物（`tts_meta.json`、`timeline.json`、`clip_plan_validated.json`、QC 报告等）按字段直接读取，`CONFIG[...]` 直接取键。校验集中在真正的输入边界：`narration_lint.py` 是 agent 手写 `narration.json` 的唯一校验器，`jianying_timeline_contract.py` 是剪映时间线的唯一校验器。
@@ -21,6 +25,7 @@ All notable changes to this project are documented here.
 
 - **`narration.json` 的 `visual_overlays` 现在会被 lint 校验。** 此前它是唯一没有校验器覆盖的 agent 手写字段：缺 `type` / `text` 的 overlay 能通过 lint，却让 recap 编排器在 TTS 跑完之后才以 `KeyError` 崩溃。校验前移到 TTS 之前，崩溃变成可读的 lint error。
 - **静音 TTS 块不再中断配音。** 零帧 WAV 会原样透传并返回中性的响度元数据，不再因除以零样本数而抛 `ZeroDivisionError`。
+- **没有 ffmpeg 的机器上交付 QC 不再崩溃。** `_probe_audio_sample_rate` 属于观测性质的 delivery QC，且会在尚未渲染的计划上运行，因此 ffprobe 不存在（`OSError`）与「报告不出采样率」按同一种结果处理。渲染路径上的探测仍然照常抛错——没有 ffmpeg 本来就剪不了片。
 
 ### Security
 
@@ -286,7 +291,8 @@ recap feels like a recap, not captions over a clip.
   MiMo API key. Five independent skills (understanding, script, cut, voiceover, assemble)
   plus a thin orchestrator; optional 剪映 draft export.
 
-[Unreleased]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/zenstory-ai/video-recap-skills/compare/v0.3.1...v0.3.2
