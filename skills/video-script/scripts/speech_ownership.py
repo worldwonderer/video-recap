@@ -1,7 +1,6 @@
 """Load measured source-speech evidence and classify narration ownership."""
 
 import json
-import math
 from pathlib import Path
 
 from lib import CONFIG, stable_hash
@@ -17,36 +16,16 @@ def _empty_evidence(mode):
 
 
 def _read_json(path):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _timed_rows(payload, key):
-    rows = payload.get(key, []) if isinstance(payload, dict) else []
-    out = []
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        try:
-            start, end = float(row.get("start")), float(row.get("end"))
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(start) and math.isfinite(end) and end > start:
-            out.append({**row, "start": start, "end": end})
-    return out
+    """JSON artifact, or None when the optional file was never written."""
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
 def _output_payload_is_current(payload, work_dir):
-    if not isinstance(payload, dict):
-        return False
-    if payload.get("schema_version") != 2 or payload.get("timeline") != "cut_output":
-        return False
     plan = _read_json(Path(work_dir) / "clip_plan_validated.json")
-    return bool(
-        isinstance(plan, dict)
-        and payload.get("clip_plan_fingerprint") == stable_hash(plan)
+    return (
+        payload is not None
+        and plan is not None
+        and payload["clip_plan_fingerprint"] == stable_hash(plan)
     )
 
 
@@ -55,55 +34,31 @@ def load_source_sentence_evidence(work_dir, mode="full"):
     if work_dir is None:
         return _empty_evidence(mode)
     work_dir = Path(work_dir)
-    output_mode = mode in {"cut", "cut_output"}
-    path = work_dir / (
-        "speech_boundary_anchors_output.json"
-        if output_mode
-        else "speech_boundary_anchors.json"
-    )
-    payload = _read_json(path)
-    if mode == "cut_output" and not _output_payload_is_current(payload, work_dir):
-        return _empty_evidence(mode)
-    if not isinstance(payload, dict):
-        payload = {}
-
-    speech_spans = _timed_rows(payload, "speech_spans")
-    quiet_windows = _timed_rows(payload, "quiet_windows")
-    if not output_mode:
-        for name in ("asr_result.json", "asr_clean.json"):
-            raw = _read_json(work_dir / name)
-            if isinstance(raw, list):
-                candidate = {"speech_spans": raw}
-            elif isinstance(raw, dict):
-                candidate = {"speech_spans": raw.get("segments", [])}
-            else:
-                continue
-            speech_spans = _timed_rows(candidate, "speech_spans")
-            if speech_spans:
-                break
-        raw_quiet = _read_json(work_dir / "silence_periods.json")
-        candidate = {
-            "quiet_windows": [
-                row
-                for row in raw_quiet
-                if isinstance(row, dict) and not bool(row.get("has_speech", False))
-            ]
-        } if isinstance(raw_quiet, list) else {}
-        quiet_windows = _timed_rows(candidate, "quiet_windows")
-
-    anchors = []
-    for anchor in payload.get("sentence_anchors", []):
-        if not isinstance(anchor, dict) or anchor.get("confidence") not in {
-            "high",
-            "medium",
-        }:
-            continue
-        try:
-            when = float(anchor.get("time"))
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(when) and when >= 0:
-            anchors.append({**anchor, "time": round(when, 3)})
+    if mode == "full":
+        payload = _read_json(work_dir / "speech_boundary_anchors.json") or {
+            "sentence_anchors": []
+        }
+        speech_spans = [
+            row for row in _read_json(work_dir / "asr_result.json") or [] if row["text"]
+        ]
+        quiet_windows = [
+            row
+            for row in _read_json(work_dir / "silence_periods.json") or []
+            if not row["has_speech"]
+        ]
+    else:
+        payload = _read_json(work_dir / "speech_boundary_anchors_output.json")
+        if mode == "cut_output" and not _output_payload_is_current(payload, work_dir):
+            return _empty_evidence(mode)
+        if payload is None:
+            payload = {"sentence_anchors": [], "speech_spans": [], "quiet_windows": []}
+        speech_spans = payload["speech_spans"]
+        quiet_windows = payload["quiet_windows"]
+    anchors = [
+        anchor
+        for anchor in payload["sentence_anchors"]
+        if anchor["confidence"] in {"high", "medium"}
+    ]
     return {
         "anchors": sorted(anchors, key=lambda item: item["time"]),
         "speech_spans": speech_spans,
@@ -147,16 +102,9 @@ def _speech_overlap_excluding_quiet(start, end, speech, quiet):
 
 def segment_overlaps_source_speech(seg, evidence):
     """Classify aggregate mix ownership across the complete narration interval."""
-    try:
-        start, end = float(seg.get("start")), float(seg.get("end"))
-    except (AttributeError, TypeError, ValueError):
-        return bool(getattr(seg, "get", lambda *_: True)("overlaps_speech", True))
-    duration = max(0.0, end - start)
+    start, end = seg["start"], seg["end"]
     quiet = evidence["quiet_windows"]
-    quiet_min = max(
-        0.3,
-        duration * float(CONFIG.get("quiet_overlap_min_ratio", 0.8) or 0.8),
-    )
+    quiet_min = max(0.3, (end - start) * CONFIG["quiet_overlap_min_ratio"])
     speech = evidence["speech_spans"]
     if speech:
         return _speech_overlap_excluding_quiet(start, end, speech, quiet) > 0.05
@@ -167,12 +115,8 @@ def segment_overlaps_source_speech(seg, evidence):
     return bool(seg.get("overlaps_speech", True))
 
 
-def entry_overlaps_source_speech(seg, evidence, tolerance=0.05):
+def entry_overlaps_source_speech(start, evidence, *, authored_overlap=True, tolerance=0.05):
     """Classify the entry instant; later quiet time cannot erase an unsafe start."""
-    try:
-        start = float(seg.get("start"))
-    except (AttributeError, TypeError, ValueError):
-        return True
     if any(
         row["start"] - tolerance <= start <= row["end"] + tolerance
         for row in evidence["quiet_windows"]
@@ -187,18 +131,13 @@ def entry_overlaps_source_speech(seg, evidence, tolerance=0.05):
         return False
     if evidence["anchors"] or evidence["require_measured"]:
         return True
-    return bool(seg.get("overlaps_speech", True))
+    return bool(authored_overlap)
 
 
 def measure_narration_speech_ownership(narration, work_dir, mode="full"):
     """Return narration copies with aggregate ownership derived from evidence."""
     evidence = load_source_sentence_evidence(work_dir, mode=mode)
-    measured = []
-    for seg in narration if isinstance(narration, list) else []:
-        if not isinstance(seg, dict):
-            measured.append(seg)
-            continue
-        item = dict(seg)
-        item["overlaps_speech"] = segment_overlaps_source_speech(item, evidence)
-        measured.append(item)
-    return measured
+    return [
+        {**seg, "overlaps_speech": segment_overlaps_source_speech(seg, evidence)}
+        for seg in narration
+    ]

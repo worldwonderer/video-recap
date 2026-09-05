@@ -111,9 +111,7 @@ def main():
     # implements padding — and it used to read the CLI flag alone, so setting the env var did
     # nothing at all while `clip_padding_source: "env"` reported otherwise. CLI still wins.
     clip_padding = (
-        args.clip_padding
-        if args.clip_padding is not None
-        else float(CONFIG.get("clip_padding", 0.0) or 0.0)
+        args.clip_padding if args.clip_padding is not None else CONFIG["clip_padding"]
     )
 
     work_dir = Path(args.work_dir)
@@ -153,34 +151,32 @@ def main():
     # Keep boundaries off the original footage's hard cuts (avoids 闪烁 at the edit point).
     # This visual-only pass runs FIRST. The sentence/quiet pass below is the final authority:
     # a prettier edit point must never move the final boundary back inside a spoken sentence.
-    if sources_manifest is None and CONFIG.get("scene_cut_snap", True):
+    if sources_manifest is None and CONFIG["scene_cut_snap"]:
         validated_plan = snap_clips_off_shot_changes(
             validated_plan,
             args.video,
-            video_duration=video_duration,
-            margin=CONFIG.get("scene_cut_snap_margin", 0.5),
-            threshold=CONFIG.get("scene_cut_detect_threshold", 0.4),
+            margin=CONFIG["scene_cut_snap_margin"],
+            threshold=CONFIG["scene_cut_detect_threshold"],
         )
 
     if sources_manifest is None:
-        silence_periods = _load_silence_for_source(work_dir, None)
-        sentence_boundaries = _load_sentence_boundary_windows(work_dir)
         safe_boundaries = _combine_boundary_windows(
-            silence_periods, sentence_boundaries
+            _load_silence_for_source(work_dir, None),
+            _load_sentence_boundary_windows(work_dir),
         )
-        if CONFIG.get("snap_clip_line_end", True):
+        if CONFIG["snap_clip_line_end"]:
             validated_plan = snap_clip_starts_to_lines(
                 validated_plan,
                 safe_boundaries,
                 video_duration,
-                CONFIG.get("clip_start_snap_max_prepend", 1.8),
-                max_trim=CONFIG.get("clip_start_snap_max_trim", 0.35),
+                CONFIG["clip_start_snap_max_prepend"],
+                max_trim=CONFIG["clip_start_snap_max_trim"],
             )
             validated_plan = snap_clip_ends_to_lines(
                 validated_plan,
                 safe_boundaries,
                 video_duration,
-                CONFIG.get("clip_snap_max_extend", 2.0),
+                CONFIG["clip_snap_max_extend"],
             )
         validated_plan = enforce_clip_sentence_boundaries(
             validated_plan,
@@ -194,54 +190,50 @@ def main():
     if sources_manifest is not None:
         validated_plan = snap_multi_source_clips(
             validated_plan,
-            validated_plan.get("sources", {}),
+            validated_plan["sources"],
             work_dir,
-            line_max_extend=CONFIG.get("clip_snap_max_extend", 2.0),
-            scene_margin=CONFIG.get("scene_cut_snap_margin", 0.5),
-            scene_threshold=CONFIG.get("scene_cut_detect_threshold", 0.4),
-            do_line_snap=CONFIG.get("snap_clip_line_end", True),
-            do_scene_snap=CONFIG.get("scene_cut_snap", True),
-            start_max_prepend=CONFIG.get("clip_start_snap_max_prepend", 1.8),
-            start_max_trim=CONFIG.get("clip_start_snap_max_trim", 0.35),
+            line_max_extend=CONFIG["clip_snap_max_extend"],
+            scene_margin=CONFIG["scene_cut_snap_margin"],
+            scene_threshold=CONFIG["scene_cut_detect_threshold"],
+            do_line_snap=CONFIG["snap_clip_line_end"],
+            do_scene_snap=CONFIG["scene_cut_snap"],
+            start_max_prepend=CONFIG["clip_start_snap_max_prepend"],
+            start_max_trim=CONFIG["clip_start_snap_max_trim"],
         )
 
-    if isinstance(validated_plan, dict):
-        validated_plan["raw_plan_fingerprint"] = value_fingerprint(raw_plan)
-        validated_plan.setdefault("qc", {})["join_fade_ms"] = round(
-            max(0.0, float(CONFIG.get("clip_join_audio_fade_ms", 30.0) or 0.0)), 3
+    validated_plan["raw_plan_fingerprint"] = value_fingerprint(raw_plan)
+    validated_plan.setdefault("qc", {})["join_fade_ms"] = round(
+        CONFIG["clip_join_audio_fade_ms"], 3
+    )
+    # Single-source clips carry no source_path; the CLI video is the only input.
+    source_paths = list(
+        dict.fromkeys(
+            clip["source_path"] for clip in validated_plan["clips"] if "source_path" in clip
         )
-        source_paths = []
-        for clip in validated_plan.get("clips", []):
-            source_path = str(clip.get("source_path") or "")
-            if source_path and source_path not in source_paths:
-                source_paths.append(source_path)
-        if not source_paths:
-            source_paths = [str(args.video)]
-        _, _, _, geometry_qc = _select_output_geometry(
-            source_paths, validated_plan.get("clips", [])
-        )
-        validated_plan["qc"]["output_geometry"] = geometry_qc
-        validated_plan["qc"]["output_geometry_reason"] = geometry_qc.get("reason")
-        allow_duration_drift = bool(args.allow_duration_drift or args.allow_sparse_cut)
-        drift_source = (
-            "--allow-duration-drift"
-            if args.allow_duration_drift
-            else ("--allow-sparse-cut" if args.allow_sparse_cut else None)
-        )
-        update_cut_qc(
-            validated_plan,
-            allow_duration_drift=allow_duration_drift,
-            duration_drift_allowed_by=drift_source,
-        )
-        update_delivery_qc(
-            validated_plan,
-            source_paths=source_paths,
-            output_path=work_dir / "edited_source.mp4",
-        )
+    ) or [str(args.video)]
+    _, _, _, geometry_qc = _select_output_geometry(source_paths, validated_plan["clips"])
+    validated_plan["qc"]["output_geometry"] = geometry_qc
+    validated_plan["qc"]["output_geometry_reason"] = geometry_qc["reason"]
+    allow_duration_drift = bool(args.allow_duration_drift or args.allow_sparse_cut)
+    drift_source = (
+        "--allow-duration-drift"
+        if args.allow_duration_drift
+        else ("--allow-sparse-cut" if args.allow_sparse_cut else None)
+    )
+    update_cut_qc(
+        validated_plan,
+        allow_duration_drift=allow_duration_drift,
+        duration_drift_allowed_by=drift_source,
+    )
+    update_delivery_qc(
+        validated_plan,
+        source_paths=source_paths,
+        output_path=work_dir / "edited_source.mp4",
+    )
     (work_dir / "clip_plan_validated.json").write_text(
         json.dumps(validated_plan, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    if (validated_plan.get("qc") or {}).get("blocking"):
+    if validated_plan["qc"].get("blocking"):
         raise SystemExit(
             "clip_plan QC blocking: fix unsafe sentence boundaries or target-duration drift. "
             "Only duration drift can be explicitly accepted with --allow-duration-drift; "
@@ -305,12 +297,12 @@ def main():
         )
         for w in report["warnings"]:
             log(f"  ⚠️ 剪后解说同步: {w['message']} [{w['code']}]")
-        if report.get("clamped_count"):
+        if report["clamped_count"]:
             raise SystemExit(
                 "剪后解说有句子被 clip 边界裁断。移动 clip_plan 边界或重写整句后重跑；"
                 "--allow-sparse-cut 不能跳过语句完整性门禁。详见 narration_mapped_lint.json"
             )
-        if report.get("blocking") and not args.allow_sparse_cut:
+        if report["blocking"] and not args.allow_sparse_cut:
             raise SystemExit(
                 "剪后解说与保留片段对不上：丢弃过多或成片过稀疏。改 narration.json / clip_plan.json "
                 "让解说落在保留片段内后重跑，或加 --allow-sparse-cut 接受当前映射。详见 narration_mapped_lint.json"

@@ -24,10 +24,7 @@ def _parse_vlm_depth_response(raw_text):
 
     # 提取【描述】
     desc_match = re.search(r'【描述】\s*\n?(.*?)(?=【帧标签】|【深层分析】|$)', raw_text, re.DOTALL)
-    if desc_match:
-        description = desc_match.group(1).strip()
-    else:
-        description = raw_text.strip()
+    description = desc_match.group(1).strip() if desc_match else raw_text.strip()
 
     # 提取【帧标签】
     frame_facts = {}

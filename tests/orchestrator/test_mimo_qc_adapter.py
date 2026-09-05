@@ -172,6 +172,37 @@ def test_multi_source_evidence_collects_per_source_asr_instead_of_stale_subtitle
     assert "generated_subtitles" not in pre["evidence"]
 
 
+def test_multi_source_evidence_ignores_source_work_dirs_outside_work_dir(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (work / "linked-outside").symlink_to(outside, target_is_directory=True)
+    inside = work / "inside"
+    inside.mkdir()
+    _write_json(
+        outside / "asr_clean.json",
+        {"segments": [{"start": 0, "end": 2, "text": "must-not-upload"}]},
+    )
+    (inside / "asr_clean.json").symlink_to(outside / "asr_clean.json")
+    _write_json(
+        work / "multi_source_manifest.json",
+        {
+            "schema_version": 1,
+            "sources": [
+                {"source_id": "traversal", "source_work_dir": "../outside"},
+                {"source_id": "symlink", "source_work_dir": "linked-outside"},
+                {"source_id": "file_symlink", "source_work_dir": "inside"},
+            ],
+        },
+    )
+
+    evidence = mimo_qc.collect_evidence(work)
+
+    assert evidence["source_asr"] == {}
+    assert "must-not-upload" not in json.dumps(evidence)
+
+
 def test_post_qc_drops_source_caption_claim_when_visible_text_is_generated_cue(
     tmp_path,
 ):
@@ -383,12 +414,13 @@ def test_live_call_is_one_request_per_stage_and_uses_cache_unless_refreshed(
     assert str(work) not in json.dumps(first["report"]["metadata"]["cache_input"])
 
 
-def test_live_missing_key_is_unavailable_and_replaces_stale_report(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize("stale_report", ['{"stale": true}', "not json"])
+def test_live_missing_key_is_unavailable_and_replaces_stale_or_malformed_report(
+    monkeypatch, tmp_path, stale_report
 ):
     work = tmp_path / "work"
     work.mkdir()
-    (work / "mimo_qc.json").write_text('{"stale": true}', encoding="utf-8")
+    (work / "mimo_qc.json").write_text(stale_report, encoding="utf-8")
     monkeypatch.setattr(
         mimo_qc,
         "mimo_qc_api_call",
@@ -499,7 +531,7 @@ def test_cache_input_includes_prompt_payload_fingerprint():
         "source_asr": {},
         "generated_subtitles": {},
         "visual_metadata": {},
-        "final_output": {},
+        "final_output": {"candidates": []},
     }
     frames = {"count": 0, "samples": []}
 

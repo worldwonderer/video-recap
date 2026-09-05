@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """video-recap inspect — advisory, read-only orientation over a recap work_dir.
 
-Pure stdlib. Reads ONLY the JSON artifacts already in work_dir (no ffmpeg, no frame
-reads, no video probing, no new deps, no cross-skill import). Every missing or malformed
-artifact degrades to a clear human message — never a traceback.
+Reads ONLY the JSON artifacts already in work_dir (no ffmpeg, no frame reads, no video
+probing, no new deps, no cross-skill import). A missing artifact is the legitimate
+"that stage has not run yet" state and is reported as such.
 
 Two subcommands:
   state     summarize the work_dir: source video + fingerprint, full|cut mode, which stage
@@ -20,6 +20,10 @@ long free text — pass --full to keep it.
 import argparse
 import json
 from pathlib import Path
+
+
+def load_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 # --- artifact catalog --------------------------------------------------------
@@ -57,7 +61,6 @@ _STORYBOARD_ARTIFACTS = [
     "storyboard/source_storyboard.json",
     "storyboard/edited_storyboard.json",
 ]
-# Forward-compat: if a write-side state file ever lands, prefer it as the state source.
 _FORWARD_STATE_FILES = ["manifest.json", "task_state.json"]
 
 _COMPACT_TEXT_LIMIT = 80
@@ -70,88 +73,71 @@ def _truncate(text, compact):
     return text[: _COMPACT_TEXT_LIMIT - 1] + "…"
 
 
-def _load_json(path):
-    """Return (data, error). error is a human string when the file is missing/malformed."""
+def _load_optional(path):
+    """The artifact's JSON, or None when the stage that writes it has not run yet."""
     path = Path(path)
     if not path.exists():
-        return None, f"{path.name} 不存在"
+        return None
     try:
-        return json.loads(path.read_text(encoding="utf-8")), None
-    except ValueError:
-        return None, f"{path.name} 不是合法 JSON（可能写坏了）"
-    except OSError as exc:
-        return None, f"{path.name} 读取失败: {exc}"
+        return load_json(path)
+    except (OSError, ValueError):
+        return None
 
 
 def _fmt_seconds(value):
-    """mm:ss for a numeric seconds value, or the raw value when not numeric."""
-    try:
-        total = float(value)
-    except (TypeError, ValueError):
-        return str(value)
-    sign = "-" if total < 0 else ""
-    total = abs(total)
-    m = int(total // 60)
-    s = total % 60
-    return f"{sign}{m:02d}:{s:05.2f}"
+    """mm:ss.ss for a seconds value."""
+    sign = "-" if value < 0 else ""
+    total = abs(value)
+    return f"{sign}{int(total // 60):02d}:{total % 60:05.2f}"
 
 
 # --- source video discovery --------------------------------------------------
 def _discover_source(work_dir):
     """Find the source video path + fingerprint by reading recap artifacts, most authoritative
-    first. Returns a dict {path, fingerprint, origin} with None values + origin="unknown" when
-    nothing records it. Never raises."""
+    first. Returns {path, fingerprint, origin} with None values + origin="unknown" when
+    nothing records it."""
+    work_dir = Path(work_dir)
     # 1. recap_run_manifest.json — canonical: written before the first pause with both fields.
-    data, _ = _load_json(Path(work_dir) / "recap_run_manifest.json")
+    #    A multi-source manifest carries `sources` instead of `source_video`.
+    data = _load_optional(work_dir / "recap_run_manifest.json")
     if isinstance(data, dict) and data.get("source_video"):
         return {
-            "path": data.get("source_video"),
+            "path": data["source_video"],
             "fingerprint": data.get("source_video_fingerprint"),
             "origin": "recap_run_manifest.json",
         }
     # 2. assembly_manifest.json — late stage; carries input_video (+ source_video in cut mode).
-    data, _ = _load_json(Path(work_dir) / "assembly_manifest.json")
+    data = _load_optional(work_dir / "assembly_manifest.json")
     if isinstance(data, dict) and (data.get("source_video") or data.get("input_video")):
         return {
-            "path": data.get("source_video") or data.get("input_video"),
+            "path": data.get("source_video") or data["input_video"],
             "fingerprint": data.get("source_video_fingerprint"),
             "origin": "assembly_manifest.json",
         }
-    # 3. edited_source.mp4.meta.json — cut mode; fingerprint only, no path.
-    data, _ = _load_json(Path(work_dir) / "edited_source.mp4.meta.json")
-    if isinstance(data, dict) and data.get("source_video_fingerprint"):
+    # 3. edited_source.mp4.meta.json — single-source cut; fingerprint only, no path.
+    data = _load_optional(work_dir / "edited_source.mp4.meta.json")
+    if data is not None and data.get("source_video_fingerprint"):
         return {
             "path": None,
-            "fingerprint": data.get("source_video_fingerprint"),
+            "fingerprint": data["source_video_fingerprint"],
             "origin": "edited_source.mp4.meta.json",
         }
     return {"path": None, "fingerprint": None, "origin": "unknown"}
 
 
 def _discover_multi_source(work_dir):
-    data, _ = _load_json(Path(work_dir) / "multi_source_manifest.json")
+    data = _load_optional(Path(work_dir) / "multi_source_manifest.json")
     if not isinstance(data, dict) or not isinstance(data.get("sources"), list):
         return None
-    sources = []
-    for raw in data.get("sources") or []:
-        if not isinstance(raw, dict):
-            continue
-        sources.append({
-            "source_id": raw.get("source_id"),
-            "source_path": raw.get("source_path"),
-            "source_name": raw.get("source_name"),
-            "source_video_fingerprint": raw.get("source_video_fingerprint"),
-            "source_work_dir": raw.get("source_work_dir"),
-            "material_id": raw.get("material_id"),
-        })
-    return {"schema_version": data.get("schema_version", 1), "sources": sources}
+    return {
+        "schema_version": data.get("schema_version", 1),
+        "sources": [source for source in data["sources"] if isinstance(source, dict)],
+    }
 
 
-# --- clip plan loading + forward affine map ----------------------------------
 def _clip_entries(plan):
-    """Normalize a clip plan (dict-with-clips or bare list) to the list of clip dicts."""
     if isinstance(plan, dict):
-        entries = plan.get("clips", [])
+        entries = plan.get("clips")
     elif isinstance(plan, list):
         entries = plan
     else:
@@ -160,57 +146,53 @@ def _clip_entries(plan):
 
 
 def _normalize_clips(entries):
-    """Coerce raw clip entries to {clip_id, source_start, source_end, output_start, output_end}.
-
-    Mirrors assemble._output_clip_spans / _build_video_clips field access: source_start/source_end
-    fall back to start/end; when output_start/output_end are absent they are derived with the same
-    forward cursor cut.py uses (sum of prior kept-clip durations). Bad rows are skipped, not fatal.
-    """
+    """Normalize current and historical validated plans for the advisory mapper."""
     clips, cursor = [], 0.0
-    for idx, c in enumerate(entries or []):
-        if not isinstance(c, dict):
+    for index, raw in enumerate(entries):
+        if not isinstance(raw, dict):
             continue
         try:
-            ss = float(c.get("source_start", c.get("start")))
-            se = float(c.get("source_end", c.get("end")))
+            source_start = float(raw.get("source_start", raw.get("start")))
+            source_end = float(raw.get("source_end", raw.get("end")))
         except (TypeError, ValueError):
             continue
-        if se - ss <= 0:
+        if source_end <= source_start:
             continue
-        out_s, out_e = c.get("output_start"), c.get("output_end")
-        if out_s is None or out_e is None:
-            out_s, out_e = cursor, cursor + (se - ss)
-            cursor += se - ss
+        output_start = raw.get("output_start")
+        output_end = raw.get("output_end")
+        if output_start is None or output_end is None:
+            output_start, output_end = cursor, cursor + source_end - source_start
         else:
             try:
-                out_s, out_e = float(out_s), float(out_e)
+                output_start, output_end = float(output_start), float(output_end)
             except (TypeError, ValueError):
-                out_s, out_e = cursor, cursor + (se - ss)
-                cursor += se - ss
-            else:
-                cursor = max(cursor, out_e)
-        clips.append({
-            "clip_id": c.get("clip_id", idx),
-            "source_id": c.get("source_id"),
-            "source_path": c.get("source_path"),
-            "source_start": ss,
-            "source_end": se,
-            "output_start": out_s,
-            "output_end": out_e,
-            "reason": str(c.get("reason", c.get("note", ""))).strip(),
-        })
+                continue
+        cursor = output_end
+        clips.append(
+            {
+                "clip_id": raw.get("clip_id", index),
+                "source_id": raw.get("source_id"),
+                "source_path": raw.get("source_path"),
+                "source_start": source_start,
+                "source_end": source_end,
+                "output_start": output_start,
+                "output_end": output_end,
+                "reason": str(raw.get("reason", raw.get("note", ""))).strip(),
+            }
+        )
     return clips
 
 
+# --- forward affine map --------------------------------------------------------
 def _source_to_output(src, clip):
-    """The forward affine map cut.py:319 uses, clamped to the clip's output span."""
-    mapped = clip["output_start"] + (float(src) - clip["source_start"])
+    """The forward affine map cut.py uses, clamped to the clip's output span."""
+    mapped = clip["output_start"] + (src - clip["source_start"])
     return round(max(clip["output_start"], min(mapped, clip["output_end"])), 3)
 
 
 def _output_to_source(out, clip):
     """Inverse of the forward affine map (same slope, clamped to the clip's source span)."""
-    mapped = clip["source_start"] + (float(out) - clip["output_start"])
+    mapped = clip["source_start"] + (out - clip["output_start"])
     return round(max(clip["source_start"], min(mapped, clip["source_end"])), 3)
 
 
@@ -255,20 +237,14 @@ def _next_pause(work_dir, mode):
 
 
 def _stale_manifest_note(work_dir, mode):
-    """Advisory stale-manifest risks read purely from JSON (no fingerprint recompute — that would
-    need the source bytes). Surfaces the two desync traps recap.py guards: a cut narration written
-    against an older clip_plan, and a missing run manifest."""
+    """Advisory stale-manifest risks read purely from file presence (no fingerprint recompute —
+    that would need the source bytes). Surfaces the two desync traps recap.py guards: a cut
+    narration without the phase ledger that ties it to a clip_plan, and a missing run manifest."""
     notes = []
     if not _present(work_dir, "recap_run_manifest.json"):
         notes.append("缺少 recap_run_manifest.json：无法证明 work_dir 属于当前视频/参数（resume 会被拒绝）。")
-    if mode == "cut" and _present(work_dir, "narration.json"):
-        ledger, _ = _load_json(Path(work_dir) / "recap_phase.json")
-        if isinstance(ledger, dict):
-            recorded = ledger.get("clip_plan_fingerprint")
-            if recorded is None:
-                notes.append("recap_phase.json 未记录 clip_plan_fingerprint：无法判断 narration 是否对当前剪辑写的。")
-        else:
-            notes.append("有 narration.json 但缺少 recap_phase.json：无法判断解说是否对当前剪辑写的（可能 stale）。")
+    if mode == "cut" and _present(work_dir, "narration.json") and not _present(work_dir, "recap_phase.json"):
+        notes.append("有 narration.json 但缺少 recap_phase.json：无法判断解说是否对当前剪辑写的（可能 stale）。")
     return notes
 
 
@@ -277,42 +253,42 @@ def _present_storyboards(work_dir):
 
 
 def cmd_state(work_dir, compact=None):
-    del compact  # Retained for callers that used the pre-v0.4 rendering hint.
+    del compact
     work_dir = Path(work_dir)
     if not work_dir.exists():
         return {"error": f"work_dir 不存在: {work_dir}"}
 
-    forward = [n for n in _FORWARD_STATE_FILES if _present(work_dir, n)]
+    forward = [name for name in _FORWARD_STATE_FILES if _present(work_dir, name)]
     mode = _detect_mode(work_dir)
-    source = _discover_source(work_dir)
-
     groups = {
         "understanding": _UNDERSTANDING_ARTIFACTS,
         "cut": _CUT_ARTIFACTS,
         "script": _SCRIPT_ARTIFACTS,
         "render": _RENDER_ARTIFACTS,
     }
-    artifacts = {}
-    for group, names in groups.items():
-        artifacts[group] = {
+    artifacts = {
+        group: {
             "present": [n for n in names if _present(work_dir, n)],
             "missing": [n for n in names if not _present(work_dir, n)],
         }
-
+        for group, names in groups.items()
+    }
     pause = _next_pause(work_dir, mode)
     return {
         "work_dir": str(work_dir),
         "mode": mode,
         "forward_state_files": forward,
-        "source_video": source,
+        "source_video": _discover_source(work_dir),
         "multi_source": _discover_multi_source(work_dir),
-        "next_pause": (
-            {"artifact": pause[0], "hint": pause[1]} if pause else None
-        ),
+        "next_pause": {"artifact": pause[0], "hint": pause[1]} if pause else None,
         "artifacts": artifacts,
         "storyboards": _present_storyboards(work_dir),
         "stale_manifest_notes": _stale_manifest_note(work_dir, mode),
     }
+
+
+def _short_fingerprint(fp):
+    return f"{fp[:12]}…" if fp else "unknown"
 
 
 def _render_state_md(state, compact):
@@ -323,18 +299,17 @@ def _render_state_md(state, compact):
         lines.append(f"状态来源（write-side manifest）: {', '.join(state['forward_state_files'])}")
     lines.append(f"模式: **{state['mode']}**")
     src = state["source_video"]
-    path = src["path"] or "unknown"
-    fp = src["fingerprint"]
-    fp_short = (fp[:12] + "…") if isinstance(fp, str) and len(fp) > 12 else (fp or "unknown")
-    lines.append(f"源视频: {_truncate(path, compact)}  (fp {fp_short}, 来源 {src['origin']})")
-    if state.get("multi_source"):
+    lines.append(
+        f"源视频: {_truncate(src['path'] or 'unknown', compact)}  "
+        f"(fp {_short_fingerprint(src['fingerprint'])}, 来源 {src['origin']})"
+    )
+    if state["multi_source"]:
         lines.append("多源素材:")
-        for s in state["multi_source"].get("sources", []):
-            fp = s.get("source_video_fingerprint")
-            short = (fp[:12] + "…") if isinstance(fp, str) and len(fp) > 12 else (fp or "unknown")
+        for s in state["multi_source"]["sources"]:
             lines.append(
-                f"  - {s.get('source_id')}: {_truncate(s.get('source_path'), compact)} "
-                f"(fp {short}, work_dir {s.get('source_work_dir')}, material {s.get('material_id')})"
+                f"  - {s['source_id']}: {_truncate(s['source_path'], compact)} "
+                f"(fp {_short_fingerprint(s['source_video_fingerprint'])}, "
+                f"work_dir {s['source_work_dir']}, material {s['material_id']})"
             )
     lines.append("")
 
@@ -376,15 +351,16 @@ def cmd_clip_map(work_dir, output_start, output_end, source_start, source_end, c
     if not validated.exists():
         return {"error": "clip_plan_validated.json 不存在：这不是 cut 运行，或剪辑计划尚未被 cut.py 校验。"
                          "（full 模式没有源↔输出映射；cut 模式请先跑 video-cut。）"}
-    plan, err = _load_json(validated)
-    if err:
-        return {"error": err}
+    try:
+        plan = load_json(validated)
+    except (OSError, ValueError):
+        return {"error": "clip_plan_validated.json 不是合法 JSON（可能写坏了）"}
     entries = _clip_entries(plan)
     if entries is None:
-        return {"error": "clip_plan_validated.json 结构异常：既不是 clips 数组也不是 {\"clips\": [...]}。"}
+        return {"error": "clip_plan_validated.json 结构异常：需要 clips 数组。"}
     clips = _normalize_clips(entries)
     if not clips:
-        return {"error": "clip_plan_validated.json 没有有效的 clip（每段需要 source_start/source_end）。"}
+        return {"error": "clip_plan_validated.json 没有有效的 clip。"}
 
     have_output = output_start is not None or output_end is not None
     have_source = source_start is not None or source_end is not None
@@ -407,10 +383,22 @@ def cmd_clip_map(work_dir, output_start, output_end, source_start, source_end, c
     return result
 
 
+def _segment(clip, *, source, output, compact):
+    # source_id/source_path are only written for multi-source cuts.
+    return {
+        "clip_id": clip["clip_id"],
+        "source_id": clip.get("source_id"),
+        "source_path": clip.get("source_path"),
+        "output": output,
+        "source": source,
+        "reason": _truncate(clip.get("reason"), compact),
+    }
+
+
 def _map_output_window(out_start, out_end, clips, compact):
     """Map a queried OUTPUT window to its SOURCE window(s), one per touched clip."""
-    out_lo = clips[0]["output_start"] if out_start is None else float(out_start)
-    out_hi = clips[-1]["output_end"] if out_end is None else float(out_end)
+    out_lo = clips[0]["output_start"] if out_start is None else out_start
+    out_hi = clips[-1]["output_end"] if out_end is None else out_end
     if out_hi < out_lo:
         out_lo, out_hi = out_hi, out_lo
     segments = []
@@ -418,14 +406,12 @@ def _map_output_window(out_start, out_end, clips, compact):
         ov = _overlap(out_lo, out_hi, clip["output_start"], clip["output_end"])
         if not ov:
             continue
-        segments.append({
-            "clip_id": clip["clip_id"],
-            "source_id": clip.get("source_id"),
-            "source_path": clip.get("source_path"),
-            "output": [round(ov[0], 3), round(ov[1], 3)],
-            "source": [_output_to_source(ov[0], clip), _output_to_source(ov[1], clip)],
-            "reason": _truncate(clip.get("reason"), compact),
-        })
+        segments.append(_segment(
+            clip,
+            output=[round(ov[0], 3), round(ov[1], 3)],
+            source=[_output_to_source(ov[0], clip), _output_to_source(ov[1], clip)],
+            compact=compact,
+        ))
     return {
         "direction": "output→source",
         "query": [round(out_lo, 3), round(out_hi, 3)],
@@ -439,8 +425,8 @@ def _map_output_window(out_start, out_end, clips, compact):
 
 def _map_source_window(src_start, src_end, clips, compact):
     """Map a queried SOURCE window to its OUTPUT window(s), flagging source ranges in no clip."""
-    src_lo = clips[0]["source_start"] if src_start is None else float(src_start)
-    src_hi = clips[-1]["source_end"] if src_end is None else float(src_end)
+    src_lo = clips[0]["source_start"] if src_start is None else src_start
+    src_hi = clips[-1]["source_end"] if src_end is None else src_end
     if src_hi < src_lo:
         src_lo, src_hi = src_hi, src_lo
     segments = []
@@ -450,14 +436,12 @@ def _map_source_window(src_start, src_end, clips, compact):
         if not ov:
             continue
         covered.append(ov)
-        segments.append({
-            "clip_id": clip["clip_id"],
-            "source_id": clip.get("source_id"),
-            "source_path": clip.get("source_path"),
-            "source": [round(ov[0], 3), round(ov[1], 3)],
-            "output": [_source_to_output(ov[0], clip), _source_to_output(ov[1], clip)],
-            "reason": _truncate(clip.get("reason"), compact),
-        })
+        segments.append(_segment(
+            clip,
+            source=[round(ov[0], 3), round(ov[1], 3)],
+            output=[_source_to_output(ov[0], clip), _source_to_output(ov[1], clip)],
+            compact=compact,
+        ))
     # Cut-out gaps: parts of [src_lo, src_hi] covered by NO kept clip (footage that was cut away).
     gaps = []
     cursor = src_lo
@@ -496,9 +480,9 @@ def _render_clip_map_md(result, compact):
         for s in q["segments"]:
             src = f"{_fmt_seconds(s['source'][0])}–{_fmt_seconds(s['source'][1])}"
             out = f"{_fmt_seconds(s['output'][0])}–{_fmt_seconds(s['output'][1])}"
-            reason = f"  〔{s['reason']}〕" if s.get("reason") else ""
-            sid = f" {s.get('source_id')}" if s.get("source_id") else ""
-            spath = f" `{_truncate(s.get('source_path'), compact)}`" if s.get("source_path") else ""
+            reason = f"  〔{s['reason']}〕" if s["reason"] else ""
+            sid = f" {s['source_id']}" if s["source_id"] else ""
+            spath = f" `{_truncate(s['source_path'], compact)}`" if s["source_path"] else ""
             lines.append(f"  clip {s['clip_id']}{sid}{spath}: 源 {src}  ↔  输出 {out}{reason}")
         if q["cut_out_source_gaps"]:
             lines.append("  ✂️ 被剪掉的源区间（不在成片里）:")

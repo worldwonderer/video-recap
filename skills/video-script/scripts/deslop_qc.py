@@ -37,10 +37,11 @@ CONNECTIVE_MARKERS = ["但", "却", "而", "于是", "随后", "直到", "结果
 
 
 def _sentence_pieces(text: str) -> list[str]:
-    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    """Split text into sentence-like pieces while keeping terminal punctuation."""
+    text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return []
-    parts = re.split(r"([。！？!?；;\.])", text)
+    parts = re.split(r"([。！？!?；;.])", text)
     out: list[str] = []
     for idx in range(0, len(parts), 2):
         body = parts[idx].strip()
@@ -51,34 +52,20 @@ def _sentence_pieces(text: str) -> list[str]:
 
 
 def _text_units(text: str) -> int:
-    text = str(text or "")
+    """Length unit for prose: CJK characters, otherwise words."""
     if re.search(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]", text):
         return len(re.sub(r"\s+", "", text))
     return len(re.findall(r"\b\w+\b", text))
 
 
-def _normalise_segments(payload: Any, *, source: str) -> list[dict[str, Any]]:
-    if isinstance(payload, str):
-        return [{"source": source, "index": None, "text": payload}]
-    if not isinstance(payload, list):
-        return []
+def _normalise_segments(payload: list[dict[str, Any]], *, source: str) -> list[dict[str, Any]]:
+    key = "narration" if source == "narration" else "text"
     segments: list[dict[str, Any]] = []
     for idx, item in enumerate(payload):
-        if isinstance(item, dict):
-            key = "narration" if source == "narration" else "text"
-            text = str(item.get(key, item.get("text", item.get("narration", ""))) or "").strip()
-        else:
-            text = str(item or "").strip()
+        text = str(item.get(key, "")).strip()
         if text:
             segments.append({"source": source, "index": idx, "text": text})
     return segments
-
-
-def _load_json(path: Path) -> tuple[Any, str | None]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8")), None
-    except Exception as exc:  # intentionally broad: malformed artifacts are QC findings
-        return None, str(exc)
 
 
 def _load_original_subtitles(work_dir: Path | None) -> list[dict[str, Any]]:
@@ -87,40 +74,28 @@ def _load_original_subtitles(work_dir: Path | None) -> list[dict[str, Any]]:
     path = work_dir / "original_subtitles.json"
     if not path.exists():
         return []
-    data, err = _load_json(path)
-    if err:
-        return []
-    return _normalise_segments(data, source="original_subtitles")
+    return _normalise_segments(json.loads(path.read_text(encoding="utf-8")), source="original_subtitles")
 
 
 def _style_card_requirement(work_dir: Path | None) -> tuple[bool, str]:
-    """Read the explicit stable requirements contract.
-
-    Legacy/migration workspaces that do not have a valid requirements file are
-    advisory-only: they must not be hard-gated by prompt text in
-    agent_narration_brief.md.
-    """
+    """Read the explicit requirements contract; workspaces without one are advisory-only."""
     if work_dir is None:
         return False, "legacy_default"
     path = work_dir / "deslop_qc_requirements.json"
     if not path.exists():
         return False, "legacy_default"
-    data, err = _load_json(path)
-    if err is not None or not isinstance(data, dict):
-        return False, "legacy_default"
-    required = data.get("style_card_required")
-    if not isinstance(required, bool):
-        return False, "legacy_default"
-    return required, "deslop_qc_requirements.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data["style_card_required"], "deslop_qc_requirements.json"
 
 
 def _style_card_issue(work_dir: Path | None, required: bool) -> dict[str, Any] | None:
     if work_dir is None:
         return None
+    severity = "blocker" if required else "advisory"
     path = work_dir / "style_card.json"
     if not path.exists():
         return {
-            "severity": "blocker" if required else "advisory",
+            "severity": severity,
             "code": "missing_style_card",
             "source": "style_card",
             "index": None,
@@ -130,19 +105,18 @@ def _style_card_issue(work_dir: Path | None, required: bool) -> dict[str, Any] |
                 "style_card.json is absent; legacy/migration workspaces may continue, but new expression-special runs should author it"
             ),
         }
-    data, err = _load_json(path)
-    if err is not None or not isinstance(data, dict) or not data:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not data:
         return {
-            "severity": "blocker" if required else "advisory",
+            "severity": severity,
             "code": "malformed_style_card",
             "source": "style_card",
             "index": None,
             "message": (
-                "style_card.json is required but missing, malformed, empty, or not a JSON object"
+                "style_card.json is required but empty or not a JSON object"
                 if required else
-                "style_card.json is present but malformed/empty; treat as migration warning unless the run requires it"
+                "style_card.json is present but empty or not a JSON object; treat as migration warning unless the run requires it"
             ),
-            "detail": err,
         }
     return None
 
@@ -153,7 +127,7 @@ def _add_issue(bucket: list[dict[str, Any]], severity: str, code: str, source: s
     bucket.append(issue)
 
 
-def analyze_deslop_qc(narration: Any, *, work_dir: str | Path | None = None, original_subtitles: Any = None) -> dict[str, Any]:
+def analyze_deslop_qc(narration: list[dict[str, Any]], *, work_dir: str | Path | None = None, original_subtitles: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Return a structured report; never mutates or rewrites input text."""
     work_path = Path(work_dir) if work_dir is not None else None
     segments = _normalise_segments(narration, source="narration")
@@ -206,7 +180,7 @@ def analyze_deslop_qc(narration: Any, *, work_dir: str | Path | None = None, ori
 
     long_segments = [seg for seg in segments if seg["source"] == "narration" and _text_units(seg["text"]) > 180]
     if long_segments:
-        _add_issue(advisories, "advisory", "overlong_narration_block", "narration", long_segments[0].get("index"), "单个解说块过长，建议拆成更可听的段落", max_units=max(_text_units(seg["text"]) for seg in long_segments))
+        _add_issue(advisories, "advisory", "overlong_narration_block", "narration", long_segments[0]["index"], "单个解说块过长，建议拆成更可听的段落", max_units=max(_text_units(seg["text"]) for seg in long_segments))
     long_sentences = [s for s in sentences if _text_units(s) > 90]
     if long_sentences:
         _add_issue(advisories, "advisory", "long_paragraph", "narration", None, "长句/长段落偏多，字幕阅读压力较大", max_units=max(_text_units(s) for s in long_sentences))

@@ -169,7 +169,7 @@ Resource-backed segments must define exactly one of:
   "resource_id": "...",
   "main_config": {"type": "sticker", "path": "/local/file"},
   "resources": [
-    "/local/file",
+    {"source_path": "/local/file"},
     {"source_path": "/local/package-dir", "target_path": "package-dir"}
   ],
   "cover_img": "/local/cover.png",
@@ -180,14 +180,13 @@ Resource-backed segments must define exactly one of:
 ```
 
 `resource_package` resolves a top-level `resource_packages` entry with the same
-shape as `resource_config`. Both the local snake_case keys above and the real
-Jackson `JyResource` keys (`resourceId`, `mainConfig`, `coverImg`) are accepted.
-`main_config` / `mainConfig` may be an object or a JSON string;
-`resource_config` itself may be an object or a local JSON-file path.
+canonical snake_case object shape as `resource_config`. `main_config` must be an
+object; callers adapt any external Jackson `JyResource` or JSON-file input before
+passing it to this skill.
 
 `resources` is an explicit local-file contract, never a filesystem guess. A
-string copies that file/directory using its basename. An object may additionally
-set `resource_kind` and a safe package-relative `target_path`. ZIP input is
+descriptor must contain `source_path` and may additionally set `resource_kind`
+and a safe package-relative `target_path`. ZIP input is
 validated against path traversal, extracted under
 `Resources/local/<kind>/<archive-stem>`, and keeps its internal layout. Exact
 declared path values in material JSON, including rich-text JSON strings, are

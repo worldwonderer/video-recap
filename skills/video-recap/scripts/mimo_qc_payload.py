@@ -2,19 +2,12 @@
 
 from __future__ import annotations
 
-
 import json
+from typing import Any
+from collections.abc import Mapping, Sequence
 
-from typing import Any, Mapping, Sequence
-
-
-from mimo_qc_evidence import (
-    _cache_evidence,
-    _fingerprint_value,
-    _redact,
-    safe_mimo_config,
-)
-from mimo_qc_contract import ARTIFACT_NAME, DEFAULT_STAGE, MAX_FRAMES
+from mimo_qc_evidence import _fingerprint_value, safe_mimo_config
+from mimo_qc_contract import ARTIFACT_NAME, DEFAULT_STAGE
 
 
 def _semantic_evidence(evidence: Mapping[str, Any], *, stage: str) -> dict[str, Any]:
@@ -83,22 +76,16 @@ def _semantic_evidence(evidence: Mapping[str, Any], *, stage: str) -> dict[str, 
         semantic["evidence_roles"].pop("post_render_frame_limits", None)
         semantic["evidence_roles"].pop("actual_audio_timing", None)
     else:
-        final_output = semantic.get("final_output")
-        candidates = (
-            final_output.get("candidates", [])
-            if isinstance(final_output, Mapping)
-            else []
-        )
         semantic["final_output"] = {
             "candidates": [
                 dict(candidate)
-                for candidate in candidates
-                if isinstance(candidate, Mapping) and candidate.get("exists") is True
+                for candidate in semantic["final_output"]["candidates"]
+                if candidate["exists"]
             ]
         }
     # Artifact summaries are already bounded at collection time; summarizing them again
     # would wrap their ``items`` arrays in another summary layer and obscure the values.
-    return _redact(semantic)
+    return semantic
 
 
 def build_payload(
@@ -144,11 +131,10 @@ def build_payload(
             '"semantic|aesthetic|sampled","evidence":{...}}]}。最多 12 条。'
         ),
         "evidence": _semantic_evidence(evidence, stage=stage),
-        "evidence_fingerprint": evidence.get("fingerprint")
-        or _fingerprint_value(_cache_evidence(evidence)),
+        "evidence_fingerprint": evidence["fingerprint"],
     }
     payload["payload_fingerprint"] = _fingerprint_value(payload)
-    return _redact(payload)
+    return payload
 
 
 def _request_payload(
@@ -167,30 +153,24 @@ def _request_payload(
             ),
         }
     ]
-    for index, sample in enumerate(list(frame_samples)[:MAX_FRAMES], start=1):
-        data_url = sample.get("data_url") if isinstance(sample, Mapping) else None
-        if isinstance(data_url, str) and data_url.startswith("data:image/jpeg;base64,"):
-            timestamp = sample.get("timestamp")
-            try:
-                timestamp_label = f"{float(timestamp):.3f}s"
-            except (TypeError, ValueError):
-                timestamp_label = "unknown"
-            content.append(
-                {
-                    "type": "text",
-                    "text": (
-                        f"BEGIN QC_FRAME_{index}: final-output timestamp {timestamp_label}. "
-                        f"Judge only this image and do not transfer its content to another frame."
-                    ),
-                }
-            )
-            content.append({"type": "image_url", "image_url": {"url": data_url}})
-            content.append(
-                {
-                    "type": "text",
-                    "text": f"END QC_FRAME_{index}: timestamp {timestamp_label}.",
-                }
-            )
+    for index, sample in enumerate(frame_samples, start=1):
+        timestamp_label = f"{sample['timestamp']:.3f}s"
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    f"BEGIN QC_FRAME_{index}: final-output timestamp {timestamp_label}. "
+                    f"Judge only this image and do not transfer its content to another frame."
+                ),
+            }
+        )
+        content.append({"type": "image_url", "image_url": {"url": sample["data_url"]}})
+        content.append(
+            {
+                "type": "text",
+                "text": f"END QC_FRAME_{index}: timestamp {timestamp_label}.",
+            }
+        )
     return {
         "model": payload["model"],
         "messages": [{"role": "user", "content": content}],
@@ -209,6 +189,8 @@ def _strip_json_fence(text: str) -> str:
 
 
 def _validated_live_output(response: Any) -> Any:
+    """The one shape check on the third-party model response: a list of observations, or an
+    object carrying `observations`/`findings`; anything else is a failed (fail-open) request."""
     try:
         content = response["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError):

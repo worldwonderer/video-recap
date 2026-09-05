@@ -4,6 +4,7 @@ import os
 import socket
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 
 # ── 配置 ──────────────────────────────────────────────────────────────
@@ -25,7 +26,7 @@ DEFAULT_FISH_TTS_REFERENCE_ID = "5653cea4ac83480aaf2bf45406556185"
 
 def normalize_api_url(raw_url):
     """Normalize a MiMo (OpenAI-compatible) base URL or chat/completions endpoint."""
-    url = (raw_url or DEFAULT_MIMO_API_URL).rstrip("/")
+    url = raw_url.rstrip("/")
     if url.endswith("/chat/completions"):
         return url
     return f"{url}/chat/completions"
@@ -33,34 +34,40 @@ def normalize_api_url(raw_url):
 
 def is_mimo_token_plan_key(api_key):
     """Return True for Xiaomi MiMo Token Plan keys, which use token-plan base URLs."""
-    return str(api_key or "").strip().startswith("tp-")
+    return api_key.startswith("tp-")
 
 
-def default_mimo_api_url(api_key="", cluster=None):
+def default_mimo_api_url(is_token_plan):
     """Pick the correct MiMo base URL for pay-as-you-go vs Token Plan keys.
 
     MiMo uses independent credentials for pay-as-you-go (`sk-*`) and Token Plan
     (`tp-*`). Token Plan keys must be sent to the Token Plan cluster base URL,
     not the pay-as-you-go `api.xiaomimimo.com` endpoint.
+
+    The caller classifies its own key with `is_mimo_token_plan_key` and passes only
+    that bit: a credential never reaches a function whose return value is logged.
     """
-    if is_mimo_token_plan_key(api_key):
-        cluster_name = (cluster or os.environ.get("MIMO_TOKEN_PLAN_CLUSTER") or DEFAULT_MIMO_TOKEN_PLAN_CLUSTER)
-        cluster_name = str(cluster_name).strip().lower()
-        return MIMO_TOKEN_PLAN_API_URLS.get(cluster_name, MIMO_TOKEN_PLAN_API_URLS[DEFAULT_MIMO_TOKEN_PLAN_CLUSTER])
-    return DEFAULT_MIMO_API_URL
+    if not is_token_plan:
+        return DEFAULT_MIMO_API_URL
+    cluster = (os.environ.get("MIMO_TOKEN_PLAN_CLUSTER") or DEFAULT_MIMO_TOKEN_PLAN_CLUSTER).strip().lower()
+    if cluster not in MIMO_TOKEN_PLAN_API_URLS:
+        raise ValueError(
+            f"MIMO_TOKEN_PLAN_CLUSTER must be one of {sorted(MIMO_TOKEN_PLAN_API_URLS)}; got {cluster!r}"
+        )
+    return MIMO_TOKEN_PLAN_API_URLS[cluster]
 
 
 def env_int(name, default, *, minimum=None):
-    """Read an integer env var; ignore malformed values instead of crashing import."""
+    """Read an integer env var; a malformed or out-of-range value is a clear error."""
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
     try:
         value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer; got {raw!r}") from None
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}; got {value}")
     return value
 
 
@@ -72,18 +79,8 @@ def env_bool(name, default=False):
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def env_float(name, default, *, minimum=None):
-    """Read a float env var; ignore malformed values instead of crashing import."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
+def load_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 # Single MiMo credential powers ASR + VLM + TTS. Per-capability overrides
@@ -94,21 +91,21 @@ _mimo_api_key = os.environ.get("MIMO_API_KEY", "")
 _mimo_video_api_key = os.environ.get("MIMO_VIDEO_API_KEY", "") or _mimo_api_key
 _mimo_tts_api_key = os.environ.get("MIMO_TTS_API_KEY", "") or _mimo_api_key
 _mimo_asr_api_key = os.environ.get("MIMO_ASR_API_KEY", "") or _mimo_api_key
-_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(_mimo_api_key)
+_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(is_mimo_token_plan_key(_mimo_api_key))
 _raw_mimo_video_api_url = (
     os.environ.get("MIMO_VIDEO_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_video_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_video_api_key))
 )
 _raw_mimo_tts_api_url = (
     os.environ.get("MIMO_TTS_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_tts_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_tts_api_key))
 )
 _raw_mimo_asr_api_url = (
     os.environ.get("MIMO_ASR_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_asr_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_asr_api_key))
 )
 
 CONFIG = {
@@ -174,24 +171,6 @@ CONFIG = {
     "vlm_workers": env_int("VLM_WORKERS", 8, minimum=1),  # VLM 并行分析线程数
 }
 
-def narration_tempo_budget(tts_rate_offset=0.0, *, config=None):
-    """Return the canonical tempo budget shared by voiceover and assemble."""
-    cfg = config or CONFIG
-    global_speed = max(0.01, float(cfg.get("narration_speed", 1.0) or 1.0))
-    rate_factor = max(0.01, 1.0 + float(tts_rate_offset or 0.0))
-    cumulative_max = max(1.0, float(cfg.get("narration_cumulative_tempo_max", 1.35) or 1.35))
-    hard_max = max(cumulative_max, float(cfg.get("narration_cumulative_tempo_hard_max", 1.40) or 1.40))
-    legacy_segment_cap = max(1.0, float(cfg.get("tts_segment_tempo_max", 1.20) or 1.20))
-    segment_tempo_max = max(1.0, min(legacy_segment_cap, cumulative_max / (global_speed * rate_factor)))
-    return {
-        "global_narration_speed": global_speed,
-        "tts_rate_factor": rate_factor,
-        "cumulative_tempo_max": cumulative_max,
-        "cumulative_tempo_hard_max": hard_max,
-        "segment_tempo_max": segment_tempo_max,
-        "max_raw_duration_factor": global_speed * segment_tempo_max,
-    }
-
 
 class MiMoQCRequestError(RuntimeError):
     """Sanitized, fail-open transport error for the advisory QC request."""
@@ -213,19 +192,18 @@ def mimo_qc_api_call(payload, *, config=None, timeout=60):
     endpoint = normalize_api_url(
         cfg.get("mimo_video_api_url") or cfg.get("mimo_api_url") or cfg.get("api_url")
     )
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
-        data=body,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
             "User-Agent": "video-recap/mimo-qc",
-            "api-key": str(api_key),
+            "api-key": api_key,
         },
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=float(timeout)) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raise MiMoQCRequestError(f"http_{exc.code}") from None
@@ -235,7 +213,7 @@ def mimo_qc_api_call(payload, *, config=None, timeout=60):
         raise MiMoQCRequestError("network_error") from None
     try:
         result = json.loads(raw)
-    except (TypeError, ValueError):
+    except ValueError:
         raise MiMoQCRequestError("invalid_json") from None
     if not isinstance(result, dict):
         raise MiMoQCRequestError("invalid_response")

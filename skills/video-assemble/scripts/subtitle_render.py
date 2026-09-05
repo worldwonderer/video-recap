@@ -6,21 +6,16 @@ from subtitle_core import (
     _seconds_to_ass_time,
     _seconds_to_srt_time,
     _style_for_measured_subtitle_band,
-    _subtitle_entries,
     _subtitle_style_config,
 )
 
-def _generate_srt(narration, work_dir, video_duration=None):
-    """将解说脚本转为 SRT 字幕文件，使用实际音频放置时间。video_duration 给定时，原声留白处补烧原声字幕。"""
+def _generate_srt(narration, work_dir, video_duration):
+    """将解说脚本转为 SRT 字幕文件，使用实际音频放置时间；原声留白处补烧原声字幕。"""
     srt_lines = []
-    entries = (_subtitle_entries(narration) if video_duration is None
-               else _combined_subtitle_entries(narration, work_dir, video_duration))
     # entries are already split into short one-line chunks, so no wrapping here.
-    for idx, entry in enumerate(entries, start=1):
-        start_ts = _seconds_to_srt_time(entry["start"])
-        end_ts = _seconds_to_srt_time(entry["end"])
+    for idx, entry in enumerate(_combined_subtitle_entries(narration, work_dir, video_duration), start=1):
         srt_lines.append(str(idx))
-        srt_lines.append(f"{start_ts} --> {end_ts}")
+        srt_lines.append(f"{_seconds_to_srt_time(entry['start'])} --> {_seconds_to_srt_time(entry['end'])}")
         srt_lines.append(_normalize_subtitle_text(entry["text"]))
         srt_lines.append("")
     srt_path = work_dir / "subtitles.srt"
@@ -31,7 +26,7 @@ def _generate_srt(narration, work_dir, video_duration=None):
 def _escape_ass_text(text):
     """Escape user text for an ASS dialogue Text field."""
     return (
-        str(text)
+        text
         .replace("\\", "\\\\")
         .replace("{", "\\{")
         .replace("}", "\\}")
@@ -41,10 +36,10 @@ def _escape_ass_text(text):
     )
 
 
-def _generate_ass(narration, work_dir, video_duration=None, canvas=None):
-    """Generate an ASS subtitle file for readable hard-sub rendering. video_duration given ⇒ also
-    burn the original dialogue (from ASR) during the original-audio gaps. canvas ({"width","height"})
-    scales the style to the real frame so portrait/竖屏 subtitles are not stretched."""
+def _generate_ass(narration, work_dir, video_duration, canvas):
+    """Generate an ASS subtitle file for readable hard-sub rendering, including the original
+    dialogue during the original-audio gaps. canvas ({"width","height"}) scales the style to the
+    real frame so portrait/竖屏 subtitles are not stretched."""
     style = _style_for_measured_subtitle_band(_subtitle_style_config(canvas), canvas)
     ass_lines = [
         "[Script Info]",
@@ -72,10 +67,8 @@ def _generate_ass(narration, work_dir, video_duration=None, canvas=None):
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
-    entries = (_subtitle_entries(narration) if video_duration is None
-               else _combined_subtitle_entries(narration, work_dir, video_duration))
     # entries are already split into short one-line chunks, so no wrapping here.
-    for entry in entries:
+    for entry in _combined_subtitle_entries(narration, work_dir, video_duration):
         text = _escape_ass_text(_normalize_subtitle_text(entry["text"]))
         ass_lines.append(
             "Dialogue: 0,"

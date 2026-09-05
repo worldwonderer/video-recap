@@ -17,9 +17,7 @@ from review_grounding import (
     remap_grounding_to_output_timeline,
 )
 from review_response import (
-    _append_warning_once,
     _bundle_fingerprint,
-    _bundle_fingerprint_warning,
     _chunk_evidence_bundle,
     _load_review_research_context,
     _merge_chunk_reviews,
@@ -65,10 +63,6 @@ def review_narration(work_dir, *, timeline="source", strict_evidence=False):
         warnings=warnings,
     )
     bundle_fp = _bundle_fingerprint(bundle)
-    fp_warning = _bundle_fingerprint_warning(bundle)
-    if fp_warning:
-        _append_warning_once(warnings, fp_warning)
-        _append_warning_once(bundle.setdefault("warnings", []), fp_warning)
     chunk_reviews = []
     chunks = _chunk_evidence_bundle(bundle)
     for chunk in chunks:

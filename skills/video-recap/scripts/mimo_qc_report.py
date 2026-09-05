@@ -2,40 +2,29 @@
 
 from __future__ import annotations
 
-
 import base64
-
 import hashlib
-
 import json
-
 import math
-
 import os
-
-
 import subprocess
-
 import tempfile
-
 from pathlib import Path
-
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
+from collections.abc import Callable, Mapping, Sequence
 
 import qc_contract
-
+from mimo_qc_client import mimo_qc_api_call
 from mimo_qc_evidence import (
     _cache_evidence,
     _effective_config,
     _existing_final_output,
     _fingerprint_value,
-    _redact,
     collect_evidence,
     safe_mimo_config,
 )
 from mimo_qc_observations import normalize_observations
 from mimo_qc_payload import _request_payload, _validated_live_output, build_payload
-from mimo_qc_client import mimo_qc_api_call
 from mimo_qc_contract import (
     ARTIFACT_NAME,
     DEFAULT_STAGE,
@@ -52,6 +41,7 @@ FrameSampler = Callable[..., Sequence[Mapping[str, Any]]]
 
 
 def _probe_duration(path: Path) -> float:
+    """Media duration via ffprobe; 0.0 when ffprobe cannot read it (frame sampling is advisory)."""
     result = subprocess.run(
         [
             "ffprobe",
@@ -72,7 +62,7 @@ def _probe_duration(path: Path) -> float:
         return 0.0
     try:
         return max(0.0, float(json.loads(result.stdout)["format"]["duration"]))
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except (KeyError, ValueError):
         return 0.0
 
 
@@ -92,7 +82,7 @@ def sample_video_frames(
         return []
     if duration <= 0:
         return []
-    count = min(int(max_frames), max(1, int(math.ceil(duration / 15.0))))
+    count = min(max_frames, max(1, math.ceil(duration / 15.0)))
     samples = []
     with tempfile.TemporaryDirectory(prefix="video-recap-mimo-qc-") as tmp:
         for index in range(count):
@@ -113,10 +103,7 @@ def sample_video_frames(
                         "-frames:v",
                         "1",
                         "-vf",
-                        (
-                            f"scale={int(max_dimension)}:{int(max_dimension)}:"
-                            "force_original_aspect_ratio=decrease"
-                        ),
+                        f"scale={max_dimension}:{max_dimension}:force_original_aspect_ratio=decrease",
                         "-q:v",
                         "4",
                         str(destination),
@@ -138,21 +125,18 @@ def sample_video_frames(
                     "timestamp": round(timestamp, 3),
                 }
             )
-    return samples[:MAX_FRAMES]
+    return samples
 
 
 def _frame_metadata(samples: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
-        "count": min(len(samples), MAX_FRAMES),
+        "count": len(samples),
         "max_frames": MAX_FRAMES,
         "max_dimension": MAX_FRAME_DIMENSION,
         "sampler_version": FRAME_SAMPLER_VERSION,
         "samples": [
-            {
-                "sha256": sample.get("sha256"),
-                "timestamp": sample.get("timestamp"),
-            }
-            for sample in list(samples)[:MAX_FRAMES]
+            {"sha256": sample["sha256"], "timestamp": sample["timestamp"]}
+            for sample in samples
         ],
     }
 
@@ -165,8 +149,8 @@ def _cache_input(
 ) -> dict[str, Any]:
     return {
         "stage": stage,
-        "model": payload.get("model"),
-        "payload_fingerprint": payload.get("payload_fingerprint"),
+        "model": payload["model"],
+        "payload_fingerprint": payload["payload_fingerprint"],
         "evidence": _cache_evidence(evidence),
         "frames": frames,
         "contract": qc_contract.SCHEMA_VERSION,
@@ -174,29 +158,27 @@ def _cache_input(
 
 
 def _stage_reports(path: Path) -> dict[str, dict[str, Any]]:
+    """Per-stage reports from an existing aggregate mimo_qc.json, or {} before the first stage."""
     if not path.is_file():
         return {}
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-        qc_contract.validate_report(report)
-    except (OSError, ValueError, TypeError, qc_contract.QCContractError):
+        stages = json.loads(path.read_text(encoding="utf-8"))["metadata"]["stages"]
+        for report in stages.values():
+            qc_contract.validate_report(report)
+        return dict(stages)
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        qc_contract.QCContractError,
+    ):
         return {}
-    stages = report.get("metadata", {}).get("stages")
-    if isinstance(stages, Mapping):
-        valid = {}
-        for stage, stage_report in stages.items():
-            try:
-                qc_contract.validate_report(stage_report)
-            except (TypeError, qc_contract.QCContractError):
-                continue
-            valid[str(stage)] = dict(stage_report)
-        return valid
-    return {str(report["stage"]): report}
 
 
 def _error_name(exc: Exception) -> str:
-    text = str(_redact(str(exc))).strip()
-    return (text or type(exc).__name__)[:120]
+    return (str(exc).strip() or type(exc).__name__)[:120]
 
 
 def build_report(
@@ -224,28 +206,20 @@ def build_report(
         output = _existing_final_output(root, final_output)
         if output is not None:
             sampler = frame_sampler or sample_video_frames
-            try:
-                samples = list(
-                    sampler(
-                        output, max_frames=MAX_FRAMES, max_dimension=MAX_FRAME_DIMENSION
-                    )
-                )[:MAX_FRAMES]
-            except Exception:
-                samples = []
+            samples = list(
+                sampler(output, max_frames=MAX_FRAMES, max_dimension=MAX_FRAME_DIMENSION)
+            )[:MAX_FRAMES]
     frame_meta = _frame_metadata(samples)
     cache_input = _cache_input(stage, payload, evidence, frame_meta)
     cache_key = _fingerprint_value(cache_input)
 
     if (
         not refresh
-        and existing
+        and existing is not None
         and existing.get("metadata", {}).get("cache_key") == cache_key
     ):
         cached = json.loads(json.dumps(existing))
-        cached["metadata"]["status"] = "cached"
-        cached["metadata"]["mode"] = "live_cache"
-        cached["metadata"]["request_count"] = 0
-        qc_contract.validate_report(cached)
+        cached["metadata"].update(status="cached", mode="live_cache", request_count=0)
         return cached
 
     status = "completed"
@@ -266,6 +240,8 @@ def build_report(
             model_output = {"observations": []}
             status, error = "unavailable", "missing_key"
         else:
+            # Fail-open boundary for the third-party request: transport errors arrive as
+            # MiMoQCRequestError (a RuntimeError), malformed responses as ValueError.
             try:
                 response = (api_call or mimo_qc_api_call)(
                     _request_payload(payload, samples),
@@ -273,7 +249,7 @@ def build_report(
                     timeout=60,
                 )
                 model_output = _validated_live_output(response)
-            except Exception as exc:
+            except (RuntimeError, ValueError) as exc:
                 model_output = {"observations": []}
                 status, error = "failed", _error_name(exc)
     else:
@@ -302,26 +278,23 @@ def build_report(
         "payload": payload,
         "config": cfg,
     }
-    report = qc_contract.build_report(
+    return qc_contract.build_report(
         artifact=ARTIFACT_NAME,
         stage=stage,
         findings=findings,
         metadata=metadata,
     )
-    qc_contract.validate_report(report)
-    return _redact(report)
 
 
 def _aggregate_reports(
     stage_reports: Mapping[str, Mapping[str, Any]], current_stage: str
 ) -> dict[str, Any]:
-    current = stage_reports[current_stage]
     findings = [
         finding
         for stage_report in stage_reports.values()
-        for finding in stage_report.get("findings", [])
+        for finding in stage_report["findings"]
     ]
-    metadata = dict(current.get("metadata", {}))
+    metadata = dict(stage_reports[current_stage]["metadata"])
     metadata["stages"] = {
         stage: dict(report) for stage, report in stage_reports.items()
     }
@@ -339,13 +312,10 @@ def write_report(
     """Atomically merge one stage into mimo_qc.json and return the aggregate."""
     path = Path(output) if output else Path(work_dir) / ARTIFACT_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    safe_stage = _redact(dict(report))
-    qc_contract.validate_report(safe_stage)
     stages = _stage_reports(path)
-    stages[safe_stage["stage"]] = safe_stage
-    aggregate = _aggregate_reports(stages, safe_stage["stage"])
-    qc_contract.validate_report(aggregate)
-    serialized = json.dumps(_redact(aggregate), ensure_ascii=False, indent=2) + "\n"
+    stages[report["stage"]] = dict(report)
+    aggregate = _aggregate_reports(stages, report["stage"])
+    serialized = json.dumps(aggregate, ensure_ascii=False, indent=2) + "\n"
     descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -353,10 +323,7 @@ def write_report(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_name, path)
-    except Exception:
-        try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
         raise
     return path, aggregate

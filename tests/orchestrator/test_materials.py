@@ -246,3 +246,36 @@ def test_save_material_reconciles_orphan_artifacts_on_resave(tmp_path):
     assert not (adir / "asr_result.json").exists(), "orphan artifact removed on re-save"
     assert (adir / "scenes.json").exists()
     assert {a["name"] for a in meta2["artifacts"]} == {"scenes.json"}
+
+
+def test_material_lookup_skips_corrupt_unrelated_cache_entry(tmp_path):
+    lib = tmp_path / "library"
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "scenes.json").write_text("[]", encoding="utf-8")
+    valid = materials.save_material(lib, work, tmp_path / "episode.mp4", "v" * 64, "settings")
+    corrupt = lib / "materials" / "corrupt" / "material.json"
+    corrupt.parent.mkdir()
+    corrupt.write_text("not json", encoding="utf-8")
+
+    found = materials.find_material_by_fingerprint(lib, "v" * 64)
+
+    assert found["material_id"] == valid["material_id"]
+
+
+def test_save_material_refreshes_malformed_existing_metadata(tmp_path):
+    lib = tmp_path / "library"
+    work = tmp_path / "work"
+    work.mkdir()
+    first = materials.save_material(
+        lib, work, tmp_path / "episode.mp4", "r" * 64, "settings", now="2026-01-01T00:00:00Z"
+    )
+    meta_path = lib / "materials" / first["material_id"] / "material.json"
+    meta_path.write_text("{}", encoding="utf-8")
+
+    refreshed = materials.save_material(
+        lib, work, tmp_path / "episode.mp4", "r" * 64, "settings", now="2026-02-01T00:00:00Z"
+    )
+
+    assert refreshed["created_at"] == "2026-02-01T00:00:00Z"
+    assert refreshed["updated_at"] == "2026-02-01T00:00:00Z"

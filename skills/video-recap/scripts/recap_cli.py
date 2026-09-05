@@ -3,7 +3,7 @@
 import argparse
 import os
 
-from recap_runtime import _env_bool
+from lib import env_bool
 
 TTS_PROVIDERS = ("auto", "mimo-tts", "fish-audio")
 
@@ -46,7 +46,7 @@ def parse_args():
     parser.add_argument(
         "--mimo-qc-refresh",
         action="store_true",
-        default=_env_bool("MIMO_QC_REFRESH", False),
+        default=env_bool("MIMO_QC_REFRESH", False),
         help="ignore a matching MiMo QC stage cache",
     )
     parser.add_argument(

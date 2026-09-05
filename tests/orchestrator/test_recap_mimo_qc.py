@@ -32,6 +32,22 @@ def _manifest_args(**overrides):
         "require_narration_review": False,
         "allow_duration_drift": False,
         "allow_sparse_cut": False,
+        "mimo_qc": "off",
+        "mimo_qc_refresh": False,
+        "mimo_tts_voice": None,
+        "tts_provider": "auto",
+        "voice_ref": None,
+        "allow_partial_tts": False,
+        "burn_subtitles": None,
+        "subtitle_y_top": None,
+        "subtitle_y_bot": None,
+        "output_dir": None,
+        "export_jianying": False,
+        "jianying_bundle_media": False,
+        "jianying_no_bundle_media": False,
+        "material_library_dir": None,
+        "use_materials": False,
+        "save_materials": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -45,6 +61,19 @@ def _mimo_result(work, stage, status="completed"):
             "finding_count": 0,
             "findings": [],
         },
+    }
+
+
+def _cut_qc(clip_count=0, total_duration=0):
+    return {
+        "status": "pass",
+        "target_duration_status": "within",
+        "total_duration": total_duration,
+        "clip_count": clip_count,
+        "join_fade_ms": 20.0,
+        "output_geometry": {"width": 1920, "height": 1080, "fps": 30},
+        "output_geometry_reason": "used_sources",
+        "warnings": [],
     }
 
 
@@ -181,7 +210,8 @@ def test_multi_pipeline_uses_the_same_mimo_stage_order(monkeypatch, tmp_path):
                                 "output_end": 1,
                                 "duration": 1,
                             }
-                        ]
+                        ],
+                        "qc": _cut_qc(clip_count=1, total_duration=1),
                     }
                 ),
                 encoding="utf-8",

@@ -1,26 +1,23 @@
 """Loudness, source handoffs, ducking envelopes, and audio mix graphs."""
 
 import json
-import math
 import re
 from pathlib import Path
 
 from artifacts import _load_work_json, _value_fingerprint
 from audio_automation import (
     coalesce_duck_windows,
-    default_bridge,
     ducking_expression,
     release_ducking_expression,
 )
 from lib import CONFIG, log, run_cmd
 
 def _limiter_filter():
-    peak = float(CONFIG.get("final_limiter_peak", 0.98) or 0.98)
-    return f"alimiter=limit={peak:.2f}:level=false"
+    return f"alimiter=limit={CONFIG['final_limiter_peak']:.2f}:level=false"
 
 
 def _loudness_mode(measured=None):
-    if not CONFIG.get("final_loudnorm", True):
+    if not CONFIG["final_loudnorm"]:
         return "limiter_only"
     return "two_pass_linear" if measured else "equivalent"
 
@@ -34,12 +31,12 @@ def final_loudnorm_filter(measured=None):
     pass; without it we still force the same target and peak limiter as a
     documented equivalent/fallback path.
     """
-    if not CONFIG.get("final_loudnorm", True):
+    if not CONFIG["final_loudnorm"]:
         return _limiter_filter()
     filt = (
-        f"loudnorm=I={CONFIG.get('target_lufs', -14.0)}"
-        f":TP={CONFIG.get('target_true_peak', -1.0)}"
-        f":LRA={CONFIG.get('target_lra', 11.0)}"
+        f"loudnorm=I={CONFIG['target_lufs']}"
+        f":TP={CONFIG['target_true_peak']}"
+        f":LRA={CONFIG['target_lra']}"
         f":linear=true"
     )
     if measured:
@@ -58,21 +55,21 @@ def final_loudnorm_filter(measured=None):
 
 def _parse_loudnorm_json(text):
     """Extract ffmpeg loudnorm JSON from stderr/stdout."""
-    for match in reversed(list(re.finditer(r"\{[\s\S]*?\}", str(text or "")))):
+    for match in reversed(list(re.finditer(r"\{[\s\S]*?\}", text))):
         try:
             data = json.loads(match.group(0))
         except ValueError:
             continue
-        if isinstance(data, dict) and {"input_i", "input_tp", "input_lra", "input_thresh", "target_offset"} <= set(data):
+        if {"input_i", "input_tp", "input_lra", "input_thresh", "target_offset"} <= set(data):
             return data
     return None
 
 
 def _loudnorm_first_pass_filter():
     return (
-        f"loudnorm=I={CONFIG.get('target_lufs', -14.0)}"
-        f":TP={CONFIG.get('target_true_peak', -1.0)}"
-        f":LRA={CONFIG.get('target_lra', 11.0)}"
+        f"loudnorm=I={CONFIG['target_lufs']}"
+        f":TP={CONFIG['target_true_peak']}"
+        f":LRA={CONFIG['target_lra']}"
         f":print_format=json"
     )
 
@@ -84,7 +81,7 @@ def _run_loudnorm_first_pass(input_video, narration_wav, original_audio_input,
     Returns ffmpeg loudnorm JSON, or None when probing fails. The caller then
     falls back to the documented equivalent single-pass target+limiter filter.
     """
-    if not CONFIG.get("final_loudnorm", True):
+    if not CONFIG["final_loudnorm"]:
         return None
     probe_fc = f"{filter_complex};[aout]{_loudnorm_first_pass_filter()}[lnprobe]"
     probe_script = Path(work_dir) / ".filter_complex_loudnorm_probe.txt"
@@ -106,7 +103,7 @@ def _run_loudnorm_first_pass(input_video, narration_wav, original_audio_input,
     if result.returncode != 0:
         log(f"  ⚠️ loudnorm 首遍测量失败，降级到目标滤镜+limiter: {result.stderr}")
         return None
-    measured = _parse_loudnorm_json((result.stdout or "") + "\n" + (result.stderr or ""))
+    measured = _parse_loudnorm_json(result.stdout + "\n" + result.stderr)
     if not measured:
         log("  ⚠️ loudnorm 首遍未返回 JSON，降级到目标滤镜+limiter")
         return None
@@ -114,10 +111,8 @@ def _run_loudnorm_first_pass(input_video, narration_wav, original_audio_input,
 
 
 def _seg_place_window(seg):
-    """Return a segment's actual placed (start, end) on the output timeline."""
-    s = seg.get("actual_place_start", seg.get("start", 0))
-    e = seg.get("actual_place_end", seg.get("end", 0))
-    return s, e
+    """A segment's actual placed (start, end) on the output timeline; zero-width when unplaced."""
+    return seg["actual_place_start"], seg["actual_place_end"]
 
 
 def _load_sentence_handoff_anchors(work_dir):
@@ -126,94 +121,58 @@ def _load_sentence_handoff_anchors(work_dir):
     cut_mode = (work_dir / "edited_source.mp4").exists() or (
         work_dir / "clip_plan_validated.json"
     ).exists()
-    candidates = [
-        work_dir
-        / (
-            "speech_boundary_anchors_output.json"
-            if cut_mode
-            else "speech_boundary_anchors.json"
+    artifact = "speech_boundary_anchors_output.json" if cut_mode else "speech_boundary_anchors.json"
+    payload = _load_work_json(work_dir, artifact)
+    if payload is None:
+        return [], None, {"require_measured": cut_mode}
+    if cut_mode:
+        # Output-clock anchors are only trusted when they were derived from the current cut plan.
+        plan = _load_work_json(work_dir, "clip_plan_validated.json")
+        fresh = (
+            payload.get("schema_version") == 2
+            and payload.get("timeline") == "cut_output"
+            and plan is not None
+            and payload.get("clip_plan_fingerprint") == _value_fingerprint(plan)
         )
-    ]
-    for path in candidates:
-        if not path.exists():
+        if not fresh:
+            return [], None, {"require_measured": True}
+        payload = {**payload, "require_measured": True}
+    anchors = {}
+    for item in payload["sentence_anchors"]:
+        if item["confidence"] not in {"high", "medium"}:
             continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if cut_mode:
-            plan = _load_work_json(work_dir, "clip_plan_validated.json")
-            if not (
-                isinstance(payload, dict)
-                and payload.get("schema_version") == 2
-                and payload.get("timeline") == "cut_output"
-                and isinstance(plan, dict)
-                and payload.get("clip_plan_fingerprint") == _value_fingerprint(plan)
-            ):
-                return [], None, {"require_measured": True}
-            payload = {**payload, "require_measured": True}
-        raw = payload.get("sentence_anchors", []) if isinstance(payload, dict) else []
-        anchors = []
-        for item in raw:
-            if not isinstance(item, dict) or item.get("confidence") not in {"high", "medium"}:
-                continue
-            try:
-                when = float(item.get("time"))
-            except (TypeError, ValueError):
-                continue
-            if math.isfinite(when) and when >= 0:
-                try:
-                    pause_start = float(item.get("pause_start", when - 0.12))
-                except (TypeError, ValueError):
-                    pause_start = when - 0.12
-                anchors.append({
-                    "time": round(when, 4),
-                    "pause_start": round(max(0.0, min(pause_start, when)), 4),
-                })
-        unique = {(row["time"], row["pause_start"]): row for row in anchors}
-        return sorted(unique.values(), key=lambda row: row["time"]), path.name, payload
-    return [], None, {"require_measured": cut_mode}
+        when = float(item["time"])
+        pause_start = float(item.get("pause_start", when - 0.12))
+        row = {
+            "time": round(when, 4),
+            "pause_start": round(max(0.0, min(pause_start, when)), 4),
+        }
+        anchors[(row["time"], row["pause_start"])] = row
+    return sorted(anchors.values(), key=lambda row: row["time"]), artifact, payload
 
 
-def _handoff_timed_rows(payload, key):
-    rows = payload.get(key, []) if isinstance(payload, dict) else []
-    out = []
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        try:
-            start, end = float(row.get("start")), float(row.get("end"))
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(start) and math.isfinite(end) and end > start:
-            out.append({"start": start, "end": end})
-    return out
+def _timed_rows(rows):
+    return [{"start": float(row["start"]), "end": float(row["end"])} for row in rows]
 
 
-def _handoff_speech_evidence(work_dir, artifact, payload):
-    speech = _handoff_timed_rows(payload, "speech_spans")
-    quiet = _handoff_timed_rows(payload, "quiet_windows")
+def _asr_segments(work_dir):
+    """Cleaned ASR segments (asr_clean.json) when present, else raw asr_result.json; [] when absent."""
+    clean = _load_work_json(work_dir, "asr_clean.json")
+    if clean is not None:
+        return clean["segments"]
+    return _load_work_json(work_dir, "asr_result.json") or []
+
+
+def _handoff_speech_evidence(work_dir, payload):
+    speech = _timed_rows(payload.get("speech_spans", []))
+    quiet = _timed_rows(payload.get("quiet_windows", []))
     if payload.get("require_measured"):
         return speech, quiet
-    if artifact == "speech_boundary_anchors_output.json":
-        return speech, quiet
     if not speech:
-        for name in ("asr_clean.json", "asr_result.json"):
-            raw = _load_work_json(work_dir, name)
-            if isinstance(raw, list):
-                raw = {"speech_spans": raw}
-            elif isinstance(raw, dict):
-                raw = {"speech_spans": raw.get("segments", [])}
-            speech = _handoff_timed_rows(raw, "speech_spans")
-            if speech:
-                break
+        speech = _timed_rows(_asr_segments(work_dir))
     if not quiet:
-        raw = _load_work_json(work_dir, "silence_periods.json")
-        raw = {"quiet_windows": [
-            row for row in raw
-            if isinstance(row, dict) and not bool(row.get("has_speech", False))
-        ]} if isinstance(raw, list) else {}
-        quiet = _handoff_timed_rows(raw, "quiet_windows")
+        silence = _load_work_json(work_dir, "silence_periods.json") or []
+        quiet = _timed_rows(row for row in silence if not row.get("has_speech", False))
     return speech, quiet
 
 
@@ -250,10 +209,7 @@ def _measured_speech_owned(
     start, end, speech, quiet, anchors, authored, require_measured=False
 ):
     duration = max(0.0, end - start)
-    quiet_min = max(
-        0.3,
-        duration * float(CONFIG.get("quiet_overlap_min_ratio", 0.8) or 0.8),
-    )
+    quiet_min = max(0.3, duration * CONFIG["quiet_overlap_min_ratio"])
     if speech:
         return _speech_overlap_excluding_quiet(start, end, speech, quiet) > 0.05
     quiet_overlap = sum(
@@ -276,19 +232,10 @@ def _entry_speech_owned(
     return True if anchors or require_measured else bool(authored)
 
 
-def _work_has_source_speech(work_dir, speech_spans=None, require_measured=False):
+def _work_has_source_speech(work_dir, speech_spans, require_measured):
     if speech_spans or require_measured:
         return True
-    for name in ("asr_clean.json", "asr_result.json"):
-        payload = _load_work_json(work_dir, name)
-        if isinstance(payload, dict):
-            payload = payload.get("segments", [])
-        if isinstance(payload, list) and any(
-            isinstance(item, dict) and str(item.get("text") or "").strip()
-            for item in payload
-        ):
-            return True
-    return False
+    return any(item["text"].strip() for item in _asr_segments(work_dir))
 
 
 def _apply_source_sentence_handoffs(tts_segments, work_dir, video_duration):
@@ -297,21 +244,14 @@ def _apply_source_sentence_handoffs(tts_segments, work_dir, video_duration):
     This does not move or trim narration. It only extends the ORIGINAL-audio duck
     envelope so returning the source track cannot reveal the middle of a sentence.
     """
-    fade = max(0.0, float(CONFIG.get("duck_fade_seconds", 0.3) or 0.0))
-    bridge = max(0.0, float(CONFIG.get("duck_bridge_seconds", 1.5) or 0.0))
+    fade = CONFIG["duck_fade_seconds"]
+    bridge = CONFIG["duck_bridge_seconds"]
     anchors, artifact, evidence_payload = _load_sentence_handoff_anchors(work_dir)
-    speech_spans, quiet_windows = _handoff_speech_evidence(
-        work_dir, artifact, evidence_payload
-    )
-    require_measured = bool(evidence_payload.get("require_measured"))
+    speech_spans, quiet_windows = _handoff_speech_evidence(work_dir, evidence_payload)
+    require_measured = evidence_payload.get("require_measured", False)
     placed = []
-    for seg in tts_segments or []:
-        if not isinstance(seg, dict):
-            continue
-        try:
-            start, end = map(float, _seg_place_window(seg))
-        except (TypeError, ValueError):
-            continue
+    for seg in tts_segments:
+        start, end = _seg_place_window(seg)
         if end > start:
             placed.append((start, end, seg))
     placed.sort(key=lambda item: (item[0], item[1]))
@@ -326,14 +266,12 @@ def _apply_source_sentence_handoffs(tts_segments, work_dir, video_duration):
         else:
             runs.append({"start": start, "end": end, "segments": [seg]})
 
-    source_has_speech = _work_has_source_speech(
-        work_dir, speech_spans, require_measured=require_measured
-    )
+    source_has_speech = _work_has_source_speech(work_dir, speech_spans, require_measured)
     report = []
     for run in runs:
         ownership = []
         for seg in run["segments"]:
-            start, end = map(float, _seg_place_window(seg))
+            start, end = _seg_place_window(seg)
             measured = _measured_speech_owned(
                 start,
                 end,
@@ -351,7 +289,7 @@ def _apply_source_sentence_handoffs(tts_segments, work_dir, video_duration):
             speech_spans,
             quiet_windows,
             anchors,
-            first.get("overlaps_speech", True),
+            first["overlaps_speech"],
             require_measured=require_measured,
         )
         speech_owned = entry_owned or any(ownership)
@@ -420,60 +358,35 @@ def _amix_tail(narr_vol, bgm_chain=""):
     return narr + "[orig][narr]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"
 
 
-def _placement_windows(tts_segments, level_for, *, source_safe_end=False):
-    """Collect [(start, end, level)] placement windows for the placed beats, using
-    `level_for(seg)` to pick each beat's duck level. Skips non-dicts and empty spans."""
-    windows = []
-    for seg in tts_segments:
-        if not isinstance(seg, dict):
-            continue
-        s, e = _seg_place_window(seg)
-        if source_safe_end:
-            try:
-                e = max(float(e), float(seg.get("source_duck_end", e)))
-            except (TypeError, ValueError):
-                pass
-        if e - s <= 0:
-            continue
-        windows.append((s, e, level_for(seg)))
-    return windows
-
-
-def _duck_envelope(tts_segments, idle, speech_vol, quiet_vol, fade, bridge=None):
+def _duck_envelope(tts_segments, idle, speech_vol, quiet_vol, fade, bridge):
     """Per-beat ducking automation for the ORIGINAL track.
 
     Uses the shared ducking contract: [start-fade,start] pre-roll ramp down,
     [start,end] held at the selected duck level, and [end,end+fade] release.
     Bridged spans use the most-ducked (lowest) level, matching timeline.json /
-    JianYing keyframes. Returns a volume= expression, or None when no beat carries
-    placement info (caller falls back to a constant).
+    JianYing keyframes. Returns a volume= expression, or None when no beat was
+    placed (caller falls back to a constant).
     """
-    if bridge is None:
-        bridge = default_bridge(fade)
     windows = []
-    for seg in tts_segments or []:
-        if not isinstance(seg, dict):
-            continue
-        try:
-            start, narration_end = map(float, _seg_place_window(seg))
-            hold_end = max(narration_end, float(seg.get("source_duck_end", narration_end)))
-            restore_at = max(hold_end, float(seg.get("source_restore_at", hold_end + fade)))
-        except (TypeError, ValueError):
-            continue
+    for seg in tts_segments:
+        start, narration_end = _seg_place_window(seg)
         if narration_end <= start:
             continue
+        hold_end = max(narration_end, seg.get("source_duck_end", narration_end))
+        restore_at = max(hold_end, seg.get("source_restore_at", hold_end + fade))
         level = speech_vol if seg.get("overlaps_speech", True) else quiet_vol
         windows.append((start, hold_end, level, restore_at))
     return release_ducking_expression(windows, idle, fade, bridge=bridge)
 
 
-def _bgm_envelope(tts_segments, base, duck, fade, bridge=None):
+def _bgm_envelope(tts_segments, base, duck, fade, bridge):
     """Per-beat ducking automation for the BGM track using the shared contract."""
-    if bridge is None:
-        bridge = default_bridge(fade)
-    windows = _placement_windows(tts_segments, lambda _: duck)
-    merged = coalesce_duck_windows(windows, bridge)
-    return ducking_expression(merged, base, fade)
+    windows = [
+        (start, end, duck)
+        for start, end in map(_seg_place_window, tts_segments)
+        if end > start
+    ]
+    return ducking_expression(coalesce_duck_windows(windows, bridge), base, fade)
 
 
 def _build_audio_filter_complex(
@@ -481,7 +394,7 @@ def _build_audio_filter_complex(
     has_bgm=False,
     *,
     original_audio_label="0:a",
-    bgm_audio_label=None,
+    bgm_audio_label="2:a",
 ):
     """Compose the audio tracks into [aout], like a cut-software timeline.
 
@@ -495,26 +408,24 @@ def _build_audio_filter_complex(
     fixed = the gap-fill envelope above; sidechaincompress = auto-duck keyed off the
     narration; none = no ducking. Placement comes from actual_place_start/end.
     """
-    ducking_mode = CONFIG.get("ducking_mode", "fixed")
+    ducking_mode = CONFIG["ducking_mode"]
     if ducking_mode == "sidechaincompress" and any(
-        isinstance(seg, dict)
-        and float(seg.get("source_duck_end", seg.get("actual_place_end", 0)) or 0)
-        > float(seg.get("actual_place_end", 0) or 0) + 1e-6
-        for seg in tts_segments or []
+        "source_duck_end" in seg and seg["source_duck_end"] > seg["actual_place_end"] + 1e-6
+        for seg in tts_segments
     ):
         log("sidechaincompress 无法保持句末交接窗口，已回退 fixed ducking")
         ducking_mode = "fixed"
-    narr_vol = CONFIG.get("ducking_narr_weight", 1.5)
-    fade = CONFIG.get("duck_fade_seconds", 0.3)
+    narr_vol = CONFIG["ducking_narr_weight"]
+    fade = CONFIG["duck_fade_seconds"]
+    bridge = CONFIG["duck_bridge_seconds"]
     original_in = f"[{original_audio_label}]"
-    bgm_in = f"[{bgm_audio_label or '2:a'}]"
+    bgm_in = f"[{bgm_audio_label}]"
 
     # BGM bed (input [2:a]): ducked under each narration window when present.
     bgm_chain = ""
     if has_bgm:
-        base = CONFIG.get("bgm_volume", 0.18)
-        bgm_expr = _bgm_envelope(tts_segments, base, CONFIG.get("bgm_ducking_volume", 0.10), fade,
-                                 bridge=CONFIG.get("duck_bridge_seconds", 1.5))
+        base = CONFIG["bgm_volume"]
+        bgm_expr = _bgm_envelope(tts_segments, base, CONFIG["bgm_ducking_volume"], fade, bridge)
         if bgm_expr:
             bgm_chain = f"{bgm_in}volume='{bgm_expr}':eval=frame,aresample=48000[bgm];"
         else:
@@ -539,17 +450,16 @@ def _build_audio_filter_complex(
         return f"{original_in}aresample=48000[orig];" + _amix_tail(narr_vol, bgm_chain)
 
     # fixed (default): gap-fill ducking envelope on the original track.
-    idle = CONFIG.get("idle_orig_volume", 1.0)
-    speech_vol = CONFIG.get("speech_ducking_volume", 0.2)
-    quiet_vol = CONFIG.get("zone_ducking_volume", 0.12)
-    bridge = CONFIG.get("duck_bridge_seconds", 1.5)
-    expr = _duck_envelope(tts_segments, idle, speech_vol, quiet_vol, fade, bridge=bridge)
+    idle = CONFIG["idle_orig_volume"]
+    speech_vol = CONFIG["speech_ducking_volume"]
+    quiet_vol = CONFIG["zone_ducking_volume"]
+    expr = _duck_envelope(tts_segments, idle, speech_vol, quiet_vol, fade, bridge)
     if expr:
-        n_overlap = sum(1 for s in tts_segments if isinstance(s, dict) and s.get("overlaps_speech", True))
-        n_quiet = sum(1 for s in tts_segments if isinstance(s, dict) and not s.get("overlaps_speech", True))
+        n_overlap = sum(1 for s in tts_segments if s.get("overlaps_speech", True))
+        n_quiet = len(tts_segments) - n_overlap
         log(f"gap-fill ducking: 间隙原声={idle}, 对白段={speech_vol}({n_overlap}), 安静段={quiet_vol}({n_quiet}), 桥接间隙<{bridge}s")
         orig = f"{original_in}volume='{expr}':eval=frame,aresample=48000[orig];"
     else:
         # No placement info at all: hold the original at a constant level.
-        orig = f"{original_in}volume={CONFIG.get('ducking_orig_volume', 0.3)},aresample=48000[orig];"
+        orig = f"{original_in}volume={CONFIG['ducking_orig_volume']},aresample=48000[orig];"
     return orig + _amix_tail(narr_vol, bgm_chain)

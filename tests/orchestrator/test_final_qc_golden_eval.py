@@ -214,6 +214,75 @@ def test_probe_failure_on_existing_nonempty_mp4_is_deterministic_blocker(tmp_pat
     assert qc.validate_report(report) is True
 
 
+def test_probe_oserror_on_existing_nonempty_mp4_is_deterministic_blocker(tmp_path):
+    output = tmp_path / "recap.mp4"
+    output.write_bytes(b"fake mp4 bytes")
+
+    report = final_qc.build_final_qc(
+        tmp_path,
+        final_output=output,
+        probe_runner=lambda _path: (_ for _ in ()).throw(OSError("missing executable")),
+    )
+
+    assert report["ok"] is False
+    assert any(f["code"] == "probe_failed" for f in report["findings"])
+
+
+def test_malformed_nested_probe_metadata_is_a_probe_failure(tmp_path):
+    output = tmp_path / "recap.mp4"
+    output.write_bytes(b"fake mp4 bytes")
+
+    report = final_qc.build_final_qc(
+        tmp_path,
+        final_output=output,
+        probe_fixture={"streams": [None], "format": {"duration": "1"}},
+    )
+
+    assert report["ok"] is False
+    assert any(f["code"] == "probe_failed" for f in report["findings"])
+
+
+def test_corrupt_advisory_mimo_qc_is_metadata_only(tmp_path):
+    output = tmp_path / "recap.mp4"
+    output.write_bytes(b"fake mp4 bytes")
+    (tmp_path / "mimo_qc.json").write_text("not json", encoding="utf-8")
+
+    report = final_qc.build_final_qc(
+        tmp_path, final_output=output, probe_fixture=_probe()
+    )
+
+    assert report["ok"] is True
+    assert report["metadata"]["artifacts"]["mimo_qc.json"]["summary"] == {"invalid": True}
+
+
+def test_corrupt_upstream_qc_becomes_schema_invalid_blocker(tmp_path):
+    output = tmp_path / "recap.mp4"
+    output.write_bytes(b"fake mp4 bytes")
+    (tmp_path / "assembly_qc.json").write_text("not json", encoding="utf-8")
+
+    report = final_qc.build_final_qc(
+        tmp_path, final_output=output, probe_fixture=_probe()
+    )
+
+    assert report["ok"] is False
+    assert {finding["code"] for finding in report["findings"]} == {
+        "upstream_assembly_qc_json_schema_invalid"
+    }
+
+
+def test_corrupt_assembly_manifest_falls_back_to_known_output(tmp_path):
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"fake mp4 bytes")
+    (tmp_path / "assembly_manifest.json").write_text("not json", encoding="utf-8")
+
+    report = final_qc.build_final_qc(tmp_path, probe_fixture=_probe())
+
+    assert report["metadata"]["final_output"]["path"] == "output.mp4"
+    assert report["metadata"]["artifacts"]["assembly_manifest.json"]["summary"] == {
+        "invalid": True
+    }
+
+
 def test_assembly_and_visual_qc_blocking_are_rolled_into_deterministic_blockers(
     tmp_path,
 ):

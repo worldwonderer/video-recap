@@ -289,7 +289,7 @@ def test_resource_config_builds_resource_material_without_network_access():
                 "timeline_end": 1.0,
                 "resource_config": {
                     "resource_id": "sticker.config",
-                    "resources": ["Resources/sticker/config"],
+                    "resources": [{"source_path": "Resources/sticker/config"}],
                     "cover_img": "covers/config.png",
                     "main_config": {
                         "name": "configured sticker",
@@ -310,7 +310,7 @@ def test_resource_config_builds_resource_material_without_network_access():
     assert sticker["preview_cover_url"] == "covers/config.png"
 
 
-def test_upstream_camel_case_jy_resource_is_accepted_without_conversion():
+def test_resource_config_uses_canonical_snake_case_objects():
     track = {
         "kind": "sticker",
         "name": "sticker",
@@ -318,9 +318,9 @@ def test_upstream_camel_case_jy_resource_is_accepted_without_conversion():
             "timeline_start": 0.0,
             "timeline_end": 1.0,
             "resource_config": {
-                "resourceId": "sticker.upstream",
-                "mainConfig": json.dumps({"name": "upstream sticker", "type": "sticker"}),
-                "coverImg": "covers/upstream.png",
+                "resource_id": "sticker.upstream",
+                "main_config": {"name": "upstream sticker", "type": "sticker"},
+                "cover_img": "covers/upstream.png",
                 "resources": [],
             },
         }],
@@ -536,7 +536,7 @@ def test_offline_resource_package_files_are_bundled_and_private_fields_removed(t
             "timeline_end": 1.0,
             "resource_config": {
                 "resource_id": "sticker.local",
-                "resources": [str(sticker_file)],
+                "resources": [{"source_path": str(sticker_file)}],
                 "main_config": {
                     "resource_id": "sticker.local",
                     "path": str(sticker_file),
@@ -570,9 +570,9 @@ def test_offline_resource_zip_is_safely_extracted_under_package_directory(tmp_pa
             "timeline_start": 0.0,
             "timeline_end": 1.0,
             "resource_config": {
-                "resourceId": "sticker.zip",
-                "resources": [str(archive)],
-                "mainConfig": {"resource_id": "sticker.zip", "type": "sticker"},
+                "resource_id": "sticker.zip",
+                "resources": [{"source_path": str(archive)}],
+                "main_config": {"resource_id": "sticker.zip", "type": "sticker"},
             },
         }],
     }
@@ -596,8 +596,8 @@ def test_text_template_can_bundle_explicit_text_resource_kind(tmp_path):
             "timeline_start": 0.0,
             "timeline_end": 1.0,
             "resource_config": {
-                "resourceId": "template.local",
-                "mainConfig": {"resource_id": "template.local", "type": "text_template"},
+                "resource_id": "template.local",
+                "main_config": {"resource_id": "template.local", "type": "text_template"},
                 "resources": [{
                     "source_path": str(text_resource),
                     "resource_kind": "text",
@@ -633,8 +633,8 @@ def test_text_template_resources_rewrite_subordinate_texts_and_effects(tmp_path)
             "timeline_start": 0.0,
             "timeline_end": 1.0,
             "resource_config": {
-                "resourceId": "template.subordinates",
-                "mainConfig": {
+                "resource_id": "template.subordinates",
+                "main_config": {
                     "resource_id": "template.subordinates",
                     "type": "text_template",
                 },

@@ -226,7 +226,7 @@ def _apply_deterministic_asr_research_fallback(
             continue
         name = str(g.get("name", "")).strip()
         aliases = [str(a).strip() for a in (g.get("aliases") or []) if str(a).strip()]
-        terms = [t for t in [name] + aliases if t]
+        terms = [t for t in [name, *aliases] if t]
         if not terms:
             continue
         matches = []

@@ -7,12 +7,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, cast
 
 from lib import CONFIG
 
@@ -23,17 +21,7 @@ TTS_PROVIDERS = {"auto", "mimo-tts", "fish-audio"}
 
 
 def _command_path(name: str) -> str | None:
-    """Return resolved command path, accepting absolute/relative executable paths."""
-    if not name:
-        return None
-    if os.path.sep in name or (os.path.altsep and os.path.altsep in name):
-        path = Path(name).expanduser()
-        return str(path) if path.exists() and os.access(path, os.X_OK) else None
     return shutil.which(name)
-
-
-def _run(cmd: list[str], *, timeout: int = 20) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, text=True, capture_output=True, timeout=timeout)
 
 
 def _ffmpeg_filters() -> set[str]:
@@ -41,7 +29,9 @@ def _ffmpeg_filters() -> set[str]:
     if not ffmpeg:
         return set()
     try:
-        result = _run([ffmpeg, "-hide_banner", "-filters"], timeout=20)
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-filters"], text=True, capture_output=True, timeout=20
+        )
     except (OSError, subprocess.SubprocessError):
         return set()
     if result.returncode != 0:
@@ -64,15 +54,15 @@ def ffmpeg_has_subtitles_filter() -> bool:
 
 
 def _asr_status() -> dict[str, object]:
-    configured = bool(CONFIG.get("mimo_asr_api_key"))
+    configured = bool(CONFIG["mimo_asr_api_key"])
     return {
         "configured": configured,
         "available": configured,
-        "mimo_asr_model": str(CONFIG.get("mimo_asr_model") or ""),
-        "mimo_asr_api_url": str(CONFIG.get("mimo_asr_api_url") or ""),
-        "mimo_asr_api_url_source": CONFIG.get("mimo_asr_api_url_source", "default"),
-        "mimo_asr_language": str(CONFIG.get("mimo_asr_language") or "auto"),
-        "mimo_asr_api_key_source": CONFIG.get("mimo_asr_api_key_source", "MIMO_API_KEY"),
+        "mimo_asr_model": CONFIG["mimo_asr_model"],
+        "mimo_asr_api_url": CONFIG["mimo_asr_api_url"],
+        "mimo_asr_api_url_source": CONFIG["mimo_asr_api_url_source"],
+        "mimo_asr_language": CONFIG["mimo_asr_language"],
+        "mimo_asr_api_key_source": CONFIG["mimo_asr_api_key_source"],
         "note": "ASR uses MiMo (mimo-v2.5-asr); set MIMO_API_KEY, or run with --skip-asr.",
     }
 
@@ -86,16 +76,16 @@ def _capability(name: str, summary: str, *, detail: str = "", action: str = "") 
     return item
 
 
-def _build_capability_menu(checks: dict[str, object]) -> dict[str, list[dict[str, str]]]:
+def _build_capability_menu(checks: dict) -> dict[str, list[dict[str, str]]]:
     """Human-ready preflight summary grouped by what can run, what blocks, and what degrades.
 
     This is intentionally a small rollup over the existing `checks` tree. It does not replace
     the raw machine checks, install anything, or introduce provider ranking.
     """
-    system = cast(dict[str, Any], checks["system_tools"])
-    api = cast(dict[str, Any], checks["api_config"])
-    asr = cast(dict[str, Any], checks["asr"])
-    tts = cast(dict[str, Any], checks["tts"])
+    system = checks["system_tools"]
+    api = checks["api_config"]
+    asr = checks["asr"]
+    tts = checks["tts"]
 
     menu: dict[str, list[dict[str, str]]] = {
         "ready": [],
@@ -104,13 +94,13 @@ def _build_capability_menu(checks: dict[str, object]) -> dict[str, list[dict[str
         "optional_upgrades": [],
     }
 
-    ffmpeg_ready = bool(system.get("ffmpeg"))
-    ffprobe_ready = bool(system.get("ffprobe"))
-    subtitles_ready = bool(system.get("burn_subtitles_ready"))
-    api_key_set = bool(api.get("api_key_set"))
-    asr_ready = bool(asr.get("available"))
-    tts_ready = bool(tts.get("available"))
-    vlm_ready = bool(api.get("mimo_video_configured"))
+    ffmpeg_ready = system["ffmpeg"]
+    ffprobe_ready = system["ffprobe"]
+    subtitles_ready = system["burn_subtitles_ready"]
+    api_key_set = api["api_key_set"]
+    asr_ready = asr["available"]
+    tts_ready = tts["available"]
+    vlm_ready = api["mimo_video_configured"]
     normal_core_ready = ffmpeg_ready and ffprobe_ready and api_key_set and vlm_ready and tts_ready
 
     if ffmpeg_ready and ffprobe_ready:
@@ -136,7 +126,7 @@ def _build_capability_menu(checks: dict[str, object]) -> dict[str, list[dict[str
             _capability(
                 "mimo_credentials",
                 "MiMo API key is configured",
-                detail=f"Source: {api.get('api_key_source')}",
+                detail=f"Source: {api['api_key_source']}",
             )
         )
     else:
@@ -153,7 +143,7 @@ def _build_capability_menu(checks: dict[str, object]) -> dict[str, list[dict[str
             _capability(
                 "mimo_vlm",
                 "MiMo VLM/video understanding is configured",
-                detail=f"Model: {api.get('vlm_model')}",
+                detail=f"Model: {api['vlm_model']}",
             )
         )
     elif api_key_set:
@@ -165,13 +155,13 @@ def _build_capability_menu(checks: dict[str, object]) -> dict[str, list[dict[str
             )
         )
 
-    tts_provider = str(tts.get("provider") or "mimo-tts")
+    tts_provider = tts["provider"]
     if tts_ready:
         menu["ready"].append(
             _capability(
                 "fish_audio_tts" if tts_provider == "fish-audio" else "mimo_tts",
                 f"{tts_provider} is configured",
-                detail=f"Model: {tts.get('model')}",
+                detail=f"Model: {tts['model']}",
             )
         )
     elif api_key_set:
@@ -192,7 +182,7 @@ def _build_capability_menu(checks: dict[str, object]) -> dict[str, list[dict[str
             _capability(
                 "mimo_asr",
                 "MiMo ASR is configured",
-                detail=f"Language: {asr.get('mimo_asr_language')}; model: {asr.get('mimo_asr_model')}",
+                detail=f"Language: {asr['mimo_asr_language']}; model: {asr['mimo_asr_model']}",
             )
         )
     else:
@@ -200,7 +190,7 @@ def _build_capability_menu(checks: dict[str, object]) -> dict[str, list[dict[str
             _capability(
                 "mimo_asr",
                 "ASR is unavailable; run only with --skip-asr",
-                action=str(asr.get("note") or "Set MIMO_ASR_API_KEY or MIMO_API_KEY to enable ASR."),
+                action=asr["note"],
             )
         )
 
@@ -266,12 +256,10 @@ def build_report(*, tts_provider: str | None = None) -> dict[str, object]:
     filters = _ffmpeg_filters()
     ffmpeg_path = _command_path("ffmpeg") or ""
     ffprobe_path = _command_path("ffprobe") or ""
-    mimo_video_configured = bool(CONFIG.get("mimo_video_api_key"))
-    mimo_tts_configured = bool(CONFIG.get("mimo_tts_api_key"))
-    fish_tts_configured = bool(CONFIG.get("fish_api_key"))
-    requested_tts_provider = str(
-        tts_provider or CONFIG.get("tts_provider") or "auto"
-    ).strip().lower()
+    mimo_video_configured = bool(CONFIG["mimo_video_api_key"])
+    mimo_tts_configured = bool(CONFIG["mimo_tts_api_key"])
+    fish_tts_configured = bool(CONFIG["fish_api_key"])
+    requested_tts_provider = tts_provider or CONFIG["tts_provider"]
     effective_tts_provider = requested_tts_provider
     if requested_tts_provider == "auto":
         effective_tts_provider = (
@@ -281,55 +269,52 @@ def build_report(*, tts_provider: str | None = None) -> dict[str, object]:
         fish_tts_configured if effective_tts_provider == "fish-audio" else mimo_tts_configured
     )
     subtitle_filter = "subtitles" in filters
-    ass_filter = "ass" in filters
-    checks: dict[str, object] = {
+    checks = {
         "system_tools": {
             "ffmpeg": bool(ffmpeg_path),
             "ffmpeg_path": ffmpeg_path,
             "ffprobe": bool(ffprobe_path),
             "ffprobe_path": ffprobe_path,
             "ffmpeg_subtitles_filter": subtitle_filter,
-            "ffmpeg_ass_filter": ass_filter,
+            "ffmpeg_ass_filter": "ass" in filters,
             "burn_subtitles_ready": bool(ffmpeg_path and subtitle_filter),
         },
         "tts": {
             "provider": effective_tts_provider,
             "requested_provider": requested_tts_provider,
             "mimo_tts_configured": mimo_tts_configured,
-            "mimo_tts_api_url": CONFIG.get("mimo_tts_api_url"),
-            "mimo_tts_api_url_source": CONFIG.get("mimo_tts_api_url_source", "default"),
-            "mimo_tts_model": CONFIG.get("mimo_tts_model"),
-            "mimo_tts_model_source": CONFIG.get("mimo_tts_model_source", "default"),
-            "mimo_tts_voice": CONFIG.get("mimo_tts_voice"),
-            "mimo_tts_voice_source": CONFIG.get("mimo_tts_voice_source", "default"),
+            "mimo_tts_api_url": CONFIG["mimo_tts_api_url"],
+            "mimo_tts_api_url_source": CONFIG["mimo_tts_api_url_source"],
+            "mimo_tts_model": CONFIG["mimo_tts_model"],
+            "mimo_tts_model_source": CONFIG["mimo_tts_model_source"],
+            "mimo_tts_voice": CONFIG["mimo_tts_voice"],
+            "mimo_tts_voice_source": CONFIG["mimo_tts_voice_source"],
             "fish_tts_configured": fish_tts_configured,
-            "fish_tts_api_url": CONFIG.get("fish_tts_api_url"),
-            "fish_tts_model": CONFIG.get("fish_tts_model"),
-            "fish_tts_reference_id_set": bool(CONFIG.get("fish_tts_reference_id")),
-            "fish_tts_reference_id_source": CONFIG.get(
-                "fish_tts_reference_id_source", "default"
-            ),
+            "fish_tts_api_url": CONFIG["fish_tts_api_url"],
+            "fish_tts_model": CONFIG["fish_tts_model"],
+            "fish_tts_reference_id_set": bool(CONFIG["fish_tts_reference_id"]),
+            "fish_tts_reference_id_source": CONFIG["fish_tts_reference_id_source"],
             "model": (
-                CONFIG.get("fish_tts_model")
+                CONFIG["fish_tts_model"]
                 if effective_tts_provider == "fish-audio"
-                else CONFIG.get("mimo_tts_model")
+                else CONFIG["mimo_tts_model"]
             ),
             "available": tts_configured,
         },
         "asr": _asr_status(),
         "api_config": {
-            "api_provider": CONFIG.get("api_provider", "mimo"),
-            "api_url": str(CONFIG.get("api_url") or ""),
-            "api_url_source": CONFIG.get("api_url_source", "default"),
-            "api_key_source": CONFIG.get("api_key_source", "MIMO_API_KEY"),
-            "api_key_set": bool(CONFIG.get("api_key")),
-            "vlm_model": CONFIG.get("vlm_model"),
-            "vlm_model_source": CONFIG.get("vlm_model_source", "default"),
-            "vlm_workers": CONFIG.get("vlm_workers"),
+            "api_provider": CONFIG["api_provider"],
+            "api_url": CONFIG["api_url"],
+            "api_url_source": CONFIG["api_url_source"],
+            "api_key_source": CONFIG["api_key_source"],
+            "api_key_set": bool(CONFIG["api_key"]),
+            "vlm_model": CONFIG["vlm_model"],
+            "vlm_model_source": CONFIG["vlm_model_source"],
+            "vlm_workers": CONFIG["vlm_workers"],
             "mimo_video_configured": mimo_video_configured,
-            "mimo_video_api_url": CONFIG.get("mimo_video_api_url"),
-            "mimo_video_model": CONFIG.get("mimo_video_model"),
-            "mimo_video_model_source": CONFIG.get("mimo_video_model_source", "default"),
+            "mimo_video_api_url": CONFIG["mimo_video_api_url"],
+            "mimo_video_model": CONFIG["mimo_video_model"],
+            "mimo_video_model_source": CONFIG["mimo_video_model_source"],
         },
         "python": {
             "executable": sys.executable,
@@ -339,28 +324,25 @@ def build_report(*, tts_provider: str | None = None) -> dict[str, object]:
 
     failures: list[str] = []
     warnings: list[str] = []
-    tools = cast(dict[str, Any], checks["system_tools"])
-    api_config = cast(dict[str, Any], checks["api_config"])
-    asr_check = cast(dict[str, Any], checks["asr"])
+    tools = checks["system_tools"]
     for name in ("ffmpeg", "ffprobe"):
-        if not tools.get(name):
+        if not tools[name]:
             failures.append(f"Missing system tool: {name}")
     if requested_tts_provider not in TTS_PROVIDERS:
         failures.append(
             "TTS_PROVIDER must be one of: auto, mimo-tts, fish-audio"
         )
-    if tools.get("ffmpeg") and not tools.get("ffmpeg_subtitles_filter"):
+    if tools["ffmpeg"] and not tools["ffmpeg_subtitles_filter"]:
         warnings.append("ffmpeg lacks subtitles/libass filter; --burn-subtitles will fail")
-    if not api_config.get("api_key_set"):
+    if not checks["api_config"]["api_key_set"]:
         failures.append("MIMO_API_KEY is not set; the default ASR / VLM path requires MiMo")
-    if not asr_check.get("available"):
+    if not checks["asr"]["available"]:
         warnings.append("ASR not configured (MIMO_API_KEY); pipeline can run with --skip-asr")
-    capability_menu = _build_capability_menu(checks)
     return {
         "ok": not failures,
         "repo_root": str(SCRIPT_DIR.parents[2]),
         "checks": checks,
-        "capability_menu": capability_menu,
+        "capability_menu": _build_capability_menu(checks),
         "failures": failures,
         "warnings": warnings,
     }
@@ -372,88 +354,86 @@ def _status_icon(ok: bool, *, warning: bool = False) -> str:
     return "!" if warning else "✗"
 
 
-def _print_human(report: dict[str, object]) -> None:
-    checks = cast(dict[str, Any], report["checks"])
+def _print_human(report: dict) -> None:
+    checks = report["checks"]
     print("video-recap doctor")
     print(f"Repo root: {report['repo_root']}")
 
-    system = cast(dict[str, Any], checks["system_tools"])
+    system = checks["system_tools"]
     print("\n[system]")
-    print(f"{_status_icon(bool(system.get('ffmpeg')))} ffmpeg: {system.get('ffmpeg_path') or 'not found'}")
-    print(f"{_status_icon(bool(system.get('ffprobe')))} ffprobe: {system.get('ffprobe_path') or 'not found'}")
+    print(f"{_status_icon(system['ffmpeg'])} ffmpeg: {system['ffmpeg_path'] or 'not found'}")
+    print(f"{_status_icon(system['ffprobe'])} ffprobe: {system['ffprobe_path'] or 'not found'}")
     print(
-        f"{_status_icon(bool(system.get('ffmpeg_subtitles_filter')), warning=True)} "
+        f"{_status_icon(system['ffmpeg_subtitles_filter'], warning=True)} "
         f"ffmpeg subtitles/libass filter: "
-        f"{'available' if system.get('ffmpeg_subtitles_filter') else 'missing'}"
+        f"{'available' if system['ffmpeg_subtitles_filter'] else 'missing'}"
     )
 
-    api = cast(dict[str, Any], checks["api_config"])
+    api = checks["api_config"]
     print("\n[api]")
-    print(f"✓ API provider: {api.get('api_provider')}")
-    print(f"✓ API URL: {api.get('api_url')} (source: {api.get('api_url_source')})")
+    print(f"✓ API provider: {api['api_provider']}")
+    print(f"✓ API URL: {api['api_url']} (source: {api['api_url_source']})")
     print(
-        f"{_status_icon(bool(api.get('api_key_set')))} "
-        f"{api.get('api_key_source')}: {'set' if api.get('api_key_set') else 'not set'}"
+        f"{_status_icon(api['api_key_set'])} "
+        f"{api['api_key_source']}: {'set' if api['api_key_set'] else 'not set'}"
     )
-    print(f"✓ VLM model: {api.get('vlm_model')} (source: {api.get('vlm_model_source')})")
-    print(f"✓ VLM_WORKERS: {api.get('vlm_workers')}")
+    print(f"✓ VLM model: {api['vlm_model']} (source: {api['vlm_model_source']})")
+    print(f"✓ VLM_WORKERS: {api['vlm_workers']}")
 
-    asr = cast(dict[str, Any], checks["asr"])
+    asr = checks["asr"]
     print("\n[asr]")
     print(
-        f"{_status_icon(bool(asr.get('available')), warning=True)} "
-        f"MiMo ASR: {'configured' if asr.get('available') else 'not configured'} "
-        f"(key: {asr.get('mimo_asr_api_key_source')})"
+        f"{_status_icon(asr['available'], warning=True)} "
+        f"MiMo ASR: {'configured' if asr['available'] else 'not configured'} "
+        f"(key: {asr['mimo_asr_api_key_source']})"
     )
-    print(f"✓ ASR model: {asr.get('mimo_asr_model')}")
-    print(f"✓ ASR API URL: {asr.get('mimo_asr_api_url')} (source: {asr.get('mimo_asr_api_url_source')})")
-    print(f"✓ ASR language: {asr.get('mimo_asr_language')}")
-    if not asr.get("available"):
-        print(f"  note: {asr.get('note')}")
+    print(f"✓ ASR model: {asr['mimo_asr_model']}")
+    print(f"✓ ASR API URL: {asr['mimo_asr_api_url']} (source: {asr['mimo_asr_api_url_source']})")
+    print(f"✓ ASR language: {asr['mimo_asr_language']}")
+    if not asr["available"]:
+        print(f"  note: {asr['note']}")
 
-    tts = cast(dict[str, Any], checks["tts"])
+    tts = checks["tts"]
     print("\n[tts]")
     print(
-        f"{_status_icon(bool(tts.get('available')))} {tts.get('provider')}: "
-        f"{'configured' if tts.get('available') else 'not configured'}"
+        f"{_status_icon(tts['available'])} {tts['provider']}: "
+        f"{'configured' if tts['available'] else 'not configured'}"
     )
-    print(f"✓ TTS model: {tts.get('model')}")
-    if tts.get("provider") == "fish-audio":
+    print(f"✓ TTS model: {tts['model']}")
+    if tts["provider"] == "fish-audio":
         print(
             "✓ TTS voice reference ID: "
-            f"{'set' if tts.get('fish_tts_reference_id_set') else 'not set'} "
-            f"(source: {tts.get('fish_tts_reference_id_source')})"
+            f"{'set' if tts['fish_tts_reference_id_set'] else 'not set'} "
+            f"(source: {tts['fish_tts_reference_id_source']})"
         )
-        print(f"✓ TTS API URL: {tts.get('fish_tts_api_url')}")
+        print(f"✓ TTS API URL: {tts['fish_tts_api_url']}")
     else:
-        print(f"✓ TTS voice: {tts.get('mimo_tts_voice')} (source: {tts.get('mimo_tts_voice_source')})")
-        print(f"✓ TTS API URL: {tts.get('mimo_tts_api_url')} (source: {tts.get('mimo_tts_api_url_source')})")
+        print(f"✓ TTS voice: {tts['mimo_tts_voice']} (source: {tts['mimo_tts_voice_source']})")
+        print(f"✓ TTS API URL: {tts['mimo_tts_api_url']} (source: {tts['mimo_tts_api_url_source']})")
 
-    menu = cast(dict[str, list[dict[str, str]]], report.get("capability_menu") or {})
+    menu = report["capability_menu"]
     print("\n[capability menu]")
     for group in ("ready", "blocked", DEGRADED_GROUP, "optional_upgrades"):
         print(f"{group}:")
-        items = menu.get(group) or []
+        items = menu[group]
         if not items:
             print("  - none")
             continue
         for item in items:
-            line = f"  - {item.get('name')}: {item.get('summary')}"
-            if item.get("detail"):
+            line = f"  - {item['name']}: {item['summary']}"
+            if "detail" in item:
                 line += f" ({item['detail']})"
             print(line)
-            if item.get("action"):
+            if "action" in item:
                 print(f"    action: {item['action']}")
 
-    warnings = cast(list[str], report.get("warnings") or [])
-    failures = cast(list[str], report.get("failures") or [])
-    if warnings:
+    if report["warnings"]:
         print("\nWarnings:")
-        for warning in warnings:
+        for warning in report["warnings"]:
             print(f"- {warning}")
-    if failures:
+    if report["failures"]:
         print("\nStatus: FAILED")
-        for failure in failures:
+        for failure in report["failures"]:
             print(f"- {failure}")
     else:
         print("\nStatus: OK")

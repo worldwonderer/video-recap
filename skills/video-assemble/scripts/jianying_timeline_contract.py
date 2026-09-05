@@ -9,18 +9,12 @@ RESOURCE_TRACK_KINDS = {
     "face_effect", "sound", "sticker", "text_template", "video_effect",
 }
 
-
 def _error(path, expectation):
     raise ValueError(f"invalid timeline {path}: {expectation}")
 
 
 def _is_number(value):
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return False
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 def _field_path(path, key):
@@ -88,6 +82,19 @@ def _validate_video_clip(clip, path):
         _error(f"{path}.compound", "must be a boolean")
 
 
+def _validate_resource_config(config, path):
+    if not isinstance(config, dict):
+        _error(path, "must be an object")
+    if not isinstance(config.get("main_config"), dict):
+        _error(f"{path}.main_config", "must be an object")
+    resources = config.get("resources", [])
+    if not isinstance(resources, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("source_path"), str)
+        for item in resources
+    ):
+        _error(f"{path}.resources", "must contain source_path objects")
+
+
 def _validate_segment(segment, path, kind):
     if not isinstance(segment, dict):
         _error(path, "must be an object")
@@ -110,8 +117,8 @@ def _validate_segment(segment, path, kind):
                 _error(f"{path}.resource_package", "must be a non-empty string")
         elif sources[0] == "material" and not isinstance(source, dict):
             _error(f"{path}.material", "must be an object")
-        elif sources[0] == "resource_config" and not isinstance(source, (dict, str)):
-            _error(f"{path}.resource_config", "must be an object or JSON file path")
+        elif sources[0] == "resource_config":
+            _validate_resource_config(source, f"{path}.resource_config")
 
 
 def _validate_track(track, path):
@@ -158,9 +165,13 @@ def _validate_v2(timeline):
         _error("canvas.fps", "must be greater than 0")
 
     _require_number(timeline, "duration", "", minimum=0)
-    for registry_name in ("resource_packages", "style_presets"):
-        if registry_name in timeline and not isinstance(timeline[registry_name], dict):
-            _error(registry_name, "must be an object")
+    resource_packages = timeline.get("resource_packages", {})
+    if not isinstance(resource_packages, dict):
+        _error("resource_packages", "must be an object")
+    for name, config in resource_packages.items():
+        _validate_resource_config(config, f"resource_packages.{name}")
+    if "style_presets" in timeline and not isinstance(timeline["style_presets"], dict):
+        _error("style_presets", "must be an object")
     tracks = timeline.get("tracks")
     if not isinstance(tracks, list):
         _error("tracks", "must be an array")

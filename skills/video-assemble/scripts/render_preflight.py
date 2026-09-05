@@ -1,23 +1,16 @@
 """Local ffmpeg capability preflight for subtitle burn-in."""
 
+import shutil
+import subprocess
+
 from lib import CONFIG
 
 def _ffmpeg_filters():
-    """Return ffmpeg's compiled-in filter names.
-
-    This skill keeps a local capability probe so it remains self-contained; keep the
-    parser behavior aligned through tests.
-    """
-    import shutil
-    import subprocess
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
+    """Return ffmpeg's compiled-in filter names."""
+    if shutil.which("ffmpeg") is None:
         return set()
-    try:
-        result = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
-                                text=True, capture_output=True, timeout=20)
-    except (OSError, subprocess.SubprocessError):
-        return set()
+    result = subprocess.run(["ffmpeg", "-hide_banner", "-filters"],
+                            text=True, capture_output=True, timeout=20)
     if result.returncode != 0:
         return set()
     filters = set()
@@ -30,13 +23,9 @@ def _ffmpeg_filters():
 
 def _preflight_burn_subtitles():
     """Fail before the (re-encoding) render when burn-in is on but ffmpeg lacks the libass
-    `subtitles` filter. _subtitle_burn_filter burns even the .ass through `subtitles=`, so
-    that is the required capability. Defense-in-depth: the orchestrator (recap.py) preflights
-    this earlier, but assemble.py can be run standalone. Only fires when ffmpeg EXISTS but
-    can't burn — an absent ffmpeg fails the render regardless and would also break the mocked,
-    ffmpeg-less test environment."""
-    import shutil
-    if not CONFIG.get("burn_subtitles", False):
+    `subtitles` filter. Only fires when ffmpeg EXISTS but can't burn — an absent ffmpeg fails
+    the render regardless."""
+    if not CONFIG["burn_subtitles"]:
         return
     if shutil.which("ffmpeg") is None:
         return

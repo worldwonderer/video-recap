@@ -765,17 +765,15 @@ def test_parse_review_downgrades_user_context_assertions_to_context_only():
     assert "user_context-only" in assertion["risk"]
 
 
-def test_bundle_fingerprint_failure_is_observable_in_bundle_warning():
+def test_bundle_fingerprint_failure_propagates():
     bundle = {"schema_version": 1, "clock": "source", "items": [], "context_items": []}
-    bundle["coverage"] = bundle  # circular metadata should not be swallowed invisibly
+    bundle["coverage"] = bundle
 
-    assert review_response._bundle_fingerprint(bundle) == ""
-    warning = bundle["metadata"]["evidence_bundle_fingerprint_warning"]
-    assert "fingerprint unavailable" in warning
-
-    chunks = review_response._chunk_evidence_bundle(bundle)
-    assert chunks[0]["metadata"]["evidence_bundle_fingerprint"] == ""
-    assert warning in chunks[0]["warnings"]
+    with pytest.raises(ValueError, match="Circular reference detected"):
+        review_response._bundle_fingerprint(bundle)
+    with pytest.raises(ValueError, match="Circular reference detected"):
+        review_response._chunk_evidence_bundle(bundle)
+    assert "metadata" not in bundle
 
 
 def test_public_grounding_seams_are_api_free(tmp_path):

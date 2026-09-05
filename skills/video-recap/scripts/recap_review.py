@@ -1,35 +1,45 @@
 """Apply the optional or strict narration-review gate before TTS."""
 
+import json
+import os
 from pathlib import Path
-
-from recap_runtime import _env_bool, _load_json
 
 
 def review_narration_enabled(args):
-    if getattr(args, "review_narration", None) is not None:
-        return bool(args.review_narration)
+    if args.review_narration is not None:
+        return args.review_narration
     return _env_bool("REVIEW_NARRATION", True)
 
 
 def require_narration_review(args):
-    if getattr(args, "require_narration_review", False):
-        return True
-    return _env_bool("REQUIRE_NARRATION_REVIEW", False)
+    return args.require_narration_review or _env_bool("REQUIRE_NARRATION_REVIEW", False)
+
+
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    return default if not raw else raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def review_result_status(work_dir):
-    data = _load_json(Path(work_dir) / "narration_review.json")
+    path = Path(work_dir) / "narration_review.json"
+    if not path.exists():
+        return {"ok": False, "reason": "missing or invalid narration_review.json"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"ok": False, "reason": "missing or invalid narration_review.json"}
     if not isinstance(data, dict):
         return {"ok": False, "reason": "missing or invalid narration_review.json"}
-    findings = [f for f in (data.get("findings") or []) if isinstance(f, dict)]
-    error_count = sum(1 for finding in findings if finding.get("severity") == "error")
+    findings = data.get("findings")
+    if not isinstance(findings, list) or any(
+        not isinstance(finding, dict)
+        or not isinstance(finding.get("severity"), str)
+        for finding in findings
+    ):
+        return {"ok": False, "reason": "missing or invalid narration_review.json"}
+    error_count = sum(1 for finding in findings if finding["severity"] == "error")
     if data.get("parse_error"):
-        return {
-            "ok": False,
-            "reason": "parse_error",
-            "review": data,
-            "errors": error_count,
-        }
+        return {"ok": False, "reason": "parse_error", "review": data, "errors": error_count}
     if error_count:
         return {
             "ok": False,
@@ -45,10 +55,7 @@ def review_result_status(work_dir):
 def clear_narration_review_artifacts(work_dir):
     """Remove prior review artifacts before a fresh pre-TTS review run."""
     for name in ("narration_review.json", "narration_review.md"):
-        try:
-            (Path(work_dir) / name).unlink()
-        except FileNotFoundError:
-            pass
+        (Path(work_dir) / name).unlink(missing_ok=True)
 
 
 def run_narration_review(work_dir, args, *, run, timeline="source"):

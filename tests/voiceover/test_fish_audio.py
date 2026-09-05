@@ -104,13 +104,13 @@ def test_provider_selection_is_explicit_and_auto_is_backward_compatible(monkeypa
     monkeypatch.setitem(CONFIG, "tts_provider", "fish-audio")
     monkeypatch.setitem(CONFIG, "fish_api_key", "fish-key")
     monkeypatch.setitem(CONFIG, "mimo_tts_api_key", "mimo-key")
-    assert voiceover._detect_tts_engine() == "fish-audio"
+    assert voiceover.resolve_tts_engine() == "fish-audio"
 
     monkeypatch.setitem(CONFIG, "tts_provider", "auto")
-    assert voiceover._detect_tts_engine() == "mimo-tts"
+    assert voiceover.resolve_tts_engine() == "mimo-tts"
 
     monkeypatch.setitem(CONFIG, "mimo_tts_api_key", "")
-    assert voiceover._detect_tts_engine() == "fish-audio"
+    assert voiceover.resolve_tts_engine() == "fish-audio"
 
 
 def test_provider_selection_rejects_undocumented_aliases(monkeypatch):
@@ -120,14 +120,15 @@ def test_provider_selection_rejects_undocumented_aliases(monkeypatch):
         voiceover._configured_tts_engine_for_cache()
 
 
-def test_cache_reuse_cannot_override_explicit_provider(monkeypatch):
+def test_explicit_provider_still_requires_its_credential(monkeypatch):
     monkeypatch.setitem(CONFIG, "tts_provider", "fish-audio")
     monkeypatch.setitem(CONFIG, "fish_api_key", "")
 
     with pytest.raises(RuntimeError, match="FISH_API_KEY"):
-        voiceover.resolve_tts_engine(prefer_existing="mimo-tts")
+        voiceover.resolve_tts_engine()
 
-    assert voiceover.resolve_tts_engine(prefer_existing="fish-audio") == "fish-audio"
+    monkeypatch.setitem(CONFIG, "fish_api_key", "fish-key")
+    assert voiceover.resolve_tts_engine() == "fish-audio"
 
 
 def test_run_tts_engine_dispatches_to_fish(monkeypatch, tmp_path):
@@ -139,7 +140,7 @@ def test_run_tts_engine_dispatches_to_fish(monkeypatch, tmp_path):
         "synthesize_fish_audio",
         lambda text, path, **kwargs: seen.append((text, path, kwargs)) or path.write_bytes(b"wav"),
     )
-    monkeypatch.setattr(voiceover, "_get_audio_duration", lambda _path: 1.0)
+    monkeypatch.setattr(voiceover, "get_video_duration", lambda _path: 1.0)
 
     voiceover._run_tts_engine("fish-audio", "免费配音。", output, rate="+5%")
 

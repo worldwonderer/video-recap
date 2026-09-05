@@ -220,7 +220,7 @@ def build_agent_brief(
     lines.extend(_format_timeline_fusion_for_brief(timeline_fusion))
     lines.extend(_format_sentence_entry_anchors_for_brief(work_dir, edit_mode))
 
-    overview_text = (mimo_overview.get("content") or "").strip()
+    overview_text = (mimo_overview or {}).get("content", "").strip()
     if overview_text:
         lines.extend(
             [

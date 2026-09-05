@@ -12,7 +12,7 @@ import brief_timeline
 import validate as narration_validate
 import pytest  # noqa: F401
 from subprocess import CompletedProcess  # noqa: F401
-from lib import CONFIG, stable_hash
+from lib import CONFIG, env_float, stable_hash
 from agent_brief import build_agent_brief
 from agent_text import _post_dedup_narration, _text_char_count
 from brief_context import assess_understanding_substrate
@@ -24,6 +24,14 @@ def test_text_char_count():
     assert _text_char_count("hello") == 5
     assert _text_char_count("你好世界") == 4
     assert _text_char_count("") == 0
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf"])
+def test_env_float_rejects_nonfinite_values(monkeypatch, raw):
+    monkeypatch.setenv("NONFINITE_FLOAT", raw)
+
+    with pytest.raises(ValueError, match="NONFINITE_FLOAT.*finite"):
+        env_float("NONFINITE_FLOAT", 1.0, minimum=0)
 
 
 def test_lint_narration_reports_warnings_and_errors(tmp_path, monkeypatch):
@@ -60,6 +68,36 @@ def test_lint_narration_rejects_empty_file(tmp_path):
     assert report["ok"] is False
     assert any(issue["code"] == "empty_narration_file" for issue in report["errors"])
     assert (tmp_path / "narration_lint.json").exists()
+
+
+def test_lint_narration_rejects_malformed_visual_overlays(tmp_path):
+    """recap's `_canonical_visual_overlay` reads type/text/start/end off these entries after
+    TTS has already run, so lint is the only place a malformed overlay can still be cheap."""
+    segment = {"start": 0.0, "end": 5.0, "narration": "开场的一段解说文字内容。"}
+    scenes = [{"scene_id": 0, "start": 0.0, "end": 5.0}]
+
+    for overlays in (
+        {"type": "top_title", "text": "标题"},          # not an array
+        ["top_title"],                                  # entry is not an object
+        [{"text": "标题"}],                             # missing type
+        [{"type": "top_title"}],                        # missing text
+        [{"type": "top_title", "text": "  "}],          # blank text
+        [{"type": "top_title", "text": "标题", "start": "0"}],  # non-numeric span
+    ):
+        report = lint_narration(
+            [{**segment, "visual_overlays": overlays}], scenes, work_dir=tmp_path
+        )
+        codes = {issue["code"] for issue in report["errors"]}
+        assert codes & {"invalid_visual_overlay", "invalid_visual_overlays"}, overlays
+
+    ok = lint_narration(
+        [{**segment, "visual_overlays": [{"type": "top_title", "text": "标题"}]}],
+        scenes,
+        work_dir=tmp_path,
+    )
+    assert not any(
+        issue["code"].startswith("invalid_visual_overlay") for issue in ok["errors"]
+    )
 
 
 def test_lint_blocks_narration_entry_that_interrupts_source_sentence(tmp_path):
@@ -1130,6 +1168,34 @@ def test_agent_brief_includes_mimo_video_overview(monkeypatch, tmp_path):
     assert "内部推理" not in text
 
 
+def test_agent_brief_ignores_malformed_optional_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setitem(CONFIG, "mimo_video_overview", True)
+    monkeypatch.setitem(CONFIG, "edit_mode", "full")
+    monkeypatch.setitem(CONFIG, "target_duration", "")
+    monkeypatch.setitem(CONFIG, "context_info", "")
+    asr = [{"start": 0.0, "end": 1.0, "text": "原始对白"}]
+    (tmp_path / "asr_result.json").write_text(json.dumps(asr), encoding="utf-8")
+    for name in (
+        "asr_clean.json",
+        "mimo_video_overview.json",
+        "mimo_video_overview.status.json",
+        "consolidation.status.json",
+        "understanding_index.json",
+        "understanding_index.json.meta.json",
+    ):
+        (tmp_path / name).write_text("not json", encoding="utf-8")
+
+    brief = build_agent_brief(
+        [{"scene_id": 0, "start": 0.0, "end": 1.0, "description": "画面"}],
+        asr,
+        [],
+        1.0,
+        tmp_path,
+    )
+
+    assert "原始对白" in brief.read_text(encoding="utf-8")
+
+
 def test_build_agent_brief_injects_background_research(monkeypatch, tmp_path):
     monkeypatch.setitem(CONFIG, "edit_mode", "full")
     monkeypatch.setitem(CONFIG, "target_duration", "")
@@ -1247,7 +1313,7 @@ def test_assess_understanding_substrate_levels():
 
 
 def test_parse_target_seconds_table():
-    """_parse_target_seconds must be total (never raise) and parse the documented forms."""
+    """Parse documented forms, leave unset values empty, and fail fast on typos."""
     from brief_timeline import _parse_target_seconds
 
     assert _parse_target_seconds("1:30") == 90.0
@@ -1256,20 +1322,20 @@ def test_parse_target_seconds_table():
     assert _parse_target_seconds("1h5m") == 3900.0
     assert _parse_target_seconds("600") == 600.0
     assert _parse_target_seconds(90) == 90.0
+    for unset in ("", None, "  "):
+        assert _parse_target_seconds(unset) is None
     for bad in (
-        "",
-        None,
         "abc",
         "0",
         "-5",
         "10x",
         "1:-30",
         "1:2:3:4",
-        "  ",
         "nan",
         "inf",
     ):
-        assert _parse_target_seconds(bad) is None
+        with pytest.raises(ValueError):
+            _parse_target_seconds(bad)
 
 
 def test_build_agent_brief_storyless_rich_video_relaxes_and_prompts_research(

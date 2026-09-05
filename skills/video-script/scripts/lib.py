@@ -2,6 +2,7 @@
 Merged from the shared core; reads the same env vars as the rest of the bundle."""
 import json
 import hashlib
+import math
 import os
 import re
 import time
@@ -38,32 +39,46 @@ def is_mimo_token_plan_key(api_key):
     return str(api_key or "").strip().startswith("tp-")
 
 
-def default_mimo_api_url(api_key="", cluster=None):
+def default_mimo_api_url(is_token_plan, cluster=None):
     """Pick the correct MiMo base URL for pay-as-you-go vs Token Plan keys.
 
     MiMo uses independent credentials for pay-as-you-go (`sk-*`) and Token Plan
     (`tp-*`). Token Plan keys must be sent to the Token Plan cluster base URL,
     not the pay-as-you-go `api.xiaomimimo.com` endpoint.
+
+    The caller classifies its own key with `is_mimo_token_plan_key` and passes only
+    that bit: a credential never reaches a function whose return value is logged.
     """
-    if is_mimo_token_plan_key(api_key):
+    if is_token_plan:
         cluster_name = (cluster or os.environ.get("MIMO_TOKEN_PLAN_CLUSTER") or DEFAULT_MIMO_TOKEN_PLAN_CLUSTER)
         cluster_name = str(cluster_name).strip().lower()
-        return MIMO_TOKEN_PLAN_API_URLS.get(cluster_name, MIMO_TOKEN_PLAN_API_URLS[DEFAULT_MIMO_TOKEN_PLAN_CLUSTER])
+        if cluster_name not in MIMO_TOKEN_PLAN_API_URLS:
+            raise ValueError(
+                f"MiMo token-plan cluster must be one of {sorted(MIMO_TOKEN_PLAN_API_URLS)}; "
+                f"got {cluster_name!r}"
+            )
+        return MIMO_TOKEN_PLAN_API_URLS[cluster_name]
     return DEFAULT_MIMO_API_URL
 
 
-def env_int(name, default, *, minimum=None):
-    """Read an integer env var; ignore malformed values instead of crashing import."""
+def _env_number(name, default, cast, minimum):
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
     try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
+        value = cast(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a {cast.__name__}; got {raw!r}") from exc
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must be finite; got {raw!r}")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}; got {value}")
     return value
+
+
+def env_int(name, default, *, minimum=None):
+    """Read an integer env var, rejecting malformed or below-minimum values."""
+    return _env_number(name, default, int, minimum)
 
 
 def env_bool(name, default=False):
@@ -75,17 +90,8 @@ def env_bool(name, default=False):
 
 
 def env_float(name, default, *, minimum=None):
-    """Read a float env var; ignore malformed values instead of crashing import."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
+    """Read a float env var, rejecting malformed or below-minimum values."""
+    return _env_number(name, default, float, minimum)
 
 
 # Single MiMo credential powers ASR + VLM + TTS. Per-capability overrides
@@ -94,11 +100,11 @@ def env_float(name, default, *, minimum=None):
 # route to the Token-Plan cluster base URL; pay-as-you-go keys use api.xiaomimimo.com.
 _mimo_api_key = os.environ.get("MIMO_API_KEY", "")
 _mimo_video_api_key = os.environ.get("MIMO_VIDEO_API_KEY", "") or _mimo_api_key
-_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(_mimo_api_key)
+_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(is_mimo_token_plan_key(_mimo_api_key))
 _raw_mimo_video_api_url = (
     os.environ.get("MIMO_VIDEO_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_video_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_video_api_key))
 )
 
 CONFIG = {
@@ -106,7 +112,6 @@ CONFIG = {
     "api_key": _mimo_api_key,
     "api_key_source": "MIMO_API_KEY",
     "mimo_video_api_url": normalize_api_url(_raw_mimo_video_api_url),
-    "mimo_model": os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
     "mimo_video_model": os.environ.get("MIMO_VIDEO_MODEL") or os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
     "vlm_model": os.environ.get("MIMO_MODEL", DEFAULT_MIMO_MODEL),
     "mimo_media_resolution": os.environ.get("MIMO_MEDIA_RESOLUTION", "default"),
@@ -278,8 +283,7 @@ def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key
         try:
             req = urllib.request.Request(endpoint, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=300) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                return result
+                return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = _sanitize_api_error(e.read().decode("utf-8", errors="replace"))
             wait = min(2 ** attempt, 60)

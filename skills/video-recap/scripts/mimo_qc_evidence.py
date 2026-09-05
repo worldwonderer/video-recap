@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-
 import hashlib
-
 import json
-
-
 import os
-
-
 from pathlib import Path
-
-from typing import Any, Mapping, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 import qc_contract
 from mimo_qc_client import DEFAULT_CONFIG
@@ -62,13 +56,8 @@ def _fingerprint_value(value: Any) -> str:
     return hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()
 
 
-def _redact(value: Any) -> Any:
-    return qc_contract.redact_secrets(value)
-
-
 def _load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
-        return _redact(json.load(handle))
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _read_text_sample(path: Path, *, max_chars: int = 4000) -> dict[str, Any]:
@@ -77,7 +66,7 @@ def _read_text_sample(path: Path, *, max_chars: int = 4000) -> dict[str, Any]:
         "kind": "text",
         "bytes": path.stat().st_size,
         "truncated": len(text) > max_chars,
-        "sample": _redact(text[:max_chars]),
+        "sample": text[:max_chars],
     }
 
 
@@ -85,7 +74,6 @@ def _summarize(
     value: Any, *, max_items: int = 8, max_string: int = 700, depth: int = 0
 ) -> Any:
     """Keep request/report evidence bounded while retaining useful structure."""
-    value = _redact(value)
     if depth >= 4:
         return {"type": type(value).__name__, "fingerprint": _fingerprint_value(value)}
     if isinstance(value, Mapping):
@@ -118,22 +106,17 @@ def _collect_file(work_dir: Path, name: str) -> dict[str, Any] | None:
     path = work_dir / name
     if not path.is_file():
         return None
-    try:
-        if path.suffix.lower() == ".json":
-            summary = _summarize(_load_json(path))
-            kind = "json"
-        else:
-            summary = _summarize(_read_text_sample(path))
-            kind = "text"
-        return {
-            "path": name,
-            "kind": kind,
-            "bytes": path.stat().st_size,
-            "fingerprint": qc_contract.artifact_fingerprint(path),
-            "summary": summary,
-        }
-    except Exception as exc:  # evidence collection is advisory too
-        return {"path": name, "kind": "unreadable", "error": type(exc).__name__}
+    if path.suffix.lower() == ".json":
+        kind, summary = "json", _summarize(_load_json(path))
+    else:
+        kind, summary = "text", _summarize(_read_text_sample(path))
+    return {
+        "path": name,
+        "kind": kind,
+        "bytes": path.stat().st_size,
+        "fingerprint": qc_contract.artifact_fingerprint(path),
+        "summary": summary,
+    }
 
 
 def _first_existing(work_dir: Path, names: Sequence[str]) -> str | None:
@@ -145,32 +128,21 @@ def _collect_multi_source_asr(work_dir: Path) -> dict[str, Any]:
     manifest_path = work_dir / "multi_source_manifest.json"
     if not manifest_path.is_file():
         return {}
-    try:
-        manifest = _load_json(manifest_path)
-    except Exception:
-        return {}
-    sources = manifest.get("sources") if isinstance(manifest, Mapping) else None
-    if not isinstance(sources, list):
-        return {}
+    root = work_dir.resolve(strict=False)
     collected = {}
-    for source in sources:
-        if not isinstance(source, Mapping):
+    for source in _load_json(manifest_path)["sources"]:
+        relative_dir = source["source_work_dir"]
+        source_dir = (root / relative_dir).resolve(strict=False)
+        if not source_dir.is_relative_to(root):
             continue
-        source_id = str(source.get("source_id") or "").strip()
-        relative_dir = str(source.get("source_work_dir") or "").strip()
-        if not source_id or not relative_dir:
-            continue
-        source_dir = (work_dir / relative_dir).resolve(strict=False)
-        try:
-            source_dir.relative_to(work_dir.resolve(strict=False))
-        except ValueError:
-            continue
-        relative_name = _first_existing(source_dir, _SOURCE_ASR_ARTIFACTS)
-        if not relative_name:
-            continue
-        item = _collect_file(work_dir, str(Path(relative_dir) / relative_name))
-        if item is not None:
-            collected[source_id] = item
+        name = _first_existing(source_dir, _SOURCE_ASR_ARTIFACTS)
+        if name is not None:
+            evidence_path = (source_dir / name).resolve(strict=False)
+            if not evidence_path.is_relative_to(root):
+                continue
+            collected[source["source_id"]] = _collect_file(
+                root, str(evidence_path.relative_to(root))
+            )
     return collected
 
 
@@ -187,14 +159,7 @@ def _final_output_candidates(
         raw.append(final_output)
     manifest_path = work_dir / "assembly_manifest.json"
     if manifest_path.is_file():
-        try:
-            manifest = _load_json(manifest_path)
-            if isinstance(manifest, Mapping):
-                for key in ("final_output", "output", "output_path", "video_path"):
-                    if manifest.get(key):
-                        raw.append(str(manifest[key]))
-        except Exception:
-            pass
+        raw.append(_load_json(manifest_path)["final_output"])
     raw.extend(("output.mp4", "recap.mp4", "final.mp4"))
     seen: set[str] = set()
     result = []
@@ -221,7 +186,7 @@ def _final_output_metadata(
                 }
             )
         outputs.append(item)
-    return {"candidates": _redact(outputs)}
+    return {"candidates": outputs}
 
 
 def _existing_final_output(
@@ -279,41 +244,28 @@ def collect_evidence(
     if not evidence["source_asr"]:
         evidence["source_asr"] = _collect_multi_source_asr(root)
     evidence["fingerprint"] = _fingerprint_value(_cache_evidence(evidence))
-    return _redact(evidence)
+    # The evidence goes into the MiMo request as well as the persisted report, so it is
+    # redacted here, before either.
+    return qc_contract.redact_secrets(evidence)
 
 
 def _cache_file_group(group: Mapping[str, Any]) -> dict[str, Any]:
     return {
-        name: {
-            key: item.get(key)
-            for key in ("kind", "bytes", "fingerprint")
-            if isinstance(item, Mapping) and item.get(key) is not None
-        }
+        name: {key: item[key] for key in ("kind", "bytes", "fingerprint")}
         for name, item in sorted(group.items())
     }
 
 
 def _cache_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
-    final_items = []
-    final_output = evidence.get("final_output")
-    if isinstance(final_output, Mapping):
-        for item in final_output.get("candidates", []):
-            if isinstance(item, Mapping):
-                final_items.append(
-                    {
-                        key: item.get(key)
-                        for key in ("exists", "bytes", "fingerprint")
-                        if key in item
-                    }
-                )
     return {
-        "artifacts": _cache_file_group(evidence.get("artifacts", {})),
-        "source_asr": _cache_file_group(evidence.get("source_asr", {})),
-        "generated_subtitles": _cache_file_group(
-            evidence.get("generated_subtitles", {})
-        ),
-        "visual_metadata": _cache_file_group(evidence.get("visual_metadata", {})),
-        "final_output": final_items,
+        "artifacts": _cache_file_group(evidence["artifacts"]),
+        "source_asr": _cache_file_group(evidence["source_asr"]),
+        "generated_subtitles": _cache_file_group(evidence["generated_subtitles"]),
+        "visual_metadata": _cache_file_group(evidence["visual_metadata"]),
+        "final_output": [
+            {key: item[key] for key in ("exists", "bytes", "fingerprint") if key in item}
+            for item in evidence["final_output"]["candidates"]
+        ],
     }
 
 
@@ -325,7 +277,7 @@ def _effective_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]
             source["mimo_qc_model"] = (
                 config.get("mimo_video_model")
                 or config.get("mimo_model")
-                or source.get("mimo_qc_model")
+                or source["mimo_qc_model"]
             )
     # MIMO_QC_MODEL is intentionally read at call time for embedded/CLI tests and
     # long-running agent processes whose environment may be adjusted between runs.
@@ -354,18 +306,15 @@ def safe_mimo_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "mimo_media_resolution",
         "mimo_media_resolution_source",
     )
-    safe = {key: source[key] for key in keep if key in source}
+    safe = {key: source[key] for key in keep}
     safe["model"] = (
-        source.get("mimo_qc_model")
-        or source.get("mimo_video_model")
-        or source.get("mimo_model")
-        or "mimo-v2.5"
+        source["mimo_qc_model"] or source["mimo_video_model"] or source["mimo_model"]
     )
     key_present = bool(
         source.get("mimo_video_api_key")
         or source.get("mimo_api_key")
         or source.get("api_key")
     )
-    safe = _redact(safe)
+    safe = qc_contract.redact_secrets(safe)
     safe["key_present"] = key_present
     return safe

@@ -100,6 +100,10 @@ def test_build_timeline_v2_normalizes_local_image_overlays():
             },
             {"source_path": "", "timeline_start": 0, "timeline_end": 2},
             {"source_path": "/bad.png", "timeline_start": 3, "timeline_end": 2},
+            {"source_path": "/missing-time.png", "timeline_start": 1},
+            {"source_path": "/malformed.png", "timeline_start": "soon", "timeline_end": 2},
+            {"source_path": "/before.png", "timeline_start": -3, "timeline_end": -1},
+            {"source_path": "/after.png", "timeline_start": 6, "timeline_end": 8},
         ],
     )
 
@@ -114,6 +118,39 @@ def test_build_timeline_v2_normalizes_local_image_overlays():
             "scale": {"x": 0.5, "y": 0.6},
             "position": {"x": 0.2, "y": -0.3},
             "flip": {"horizontal": True, "vertical": False},
+        }
+    ]
+
+
+def test_build_timeline_clips_image_overlays_to_output_range():
+    tl = build_timeline(
+        {"width": 1280, "height": 720, "fps": 30},
+        5.0,
+        [],
+        [],
+        image_segments=[
+            {
+                "source_path": "/full-card.png",
+                "timeline_start": -1,
+                "timeline_end": 7,
+                "opacity": 2,
+                "scale": "invalid",
+                "position": None,
+                "flip": [],
+            }
+        ],
+    )
+
+    assert _track(tl, "image", "image")["segments"] == [
+        {
+            "source_path": "/full-card.png",
+            "timeline_start": 0.0,
+            "timeline_end": 5.0,
+            "opacity": 1.0,
+            "rotation_degrees": 0.0,
+            "scale": {"x": 1.0, "y": 1.0},
+            "position": {"x": 0.0, "y": 0.0},
+            "flip": {"horizontal": False, "vertical": False},
         }
     ]
 
@@ -600,14 +637,16 @@ def test_emit_timeline_marks_degraded_multi_source_fallback(monkeypatch, tmp_pat
     )
     monkeypatch.setitem(CONFIG, "source_video_explicit", False)
     monkeypatch.setitem(CONFIG, "source_video", "")
-    monkeypatch.setattr(
-        timeline_emit,
-        "_probe_canvas",
-        lambda _path: {"width": 100, "height": 100, "fps": 25},
-    )
     monkeypatch.setattr(timeline_emit, "_combined_subtitle_entries", lambda *_args: [])
 
-    timeline = timeline_emit._emit_timeline(rendered, [], work, 3.0, has_bgm=False)
+    timeline = timeline_emit._emit_timeline(
+        rendered,
+        [],
+        work,
+        3.0,
+        {"width": 100, "height": 100, "fps": 25},
+        has_bgm=False,
+    )
 
     assert timeline["provenance"]["degraded"] is True
     assert timeline["provenance"]["degraded_clips"][0]["reason"].startswith(

@@ -1,12 +1,14 @@
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'skills' / 'video-assemble' / 'scripts'))
 """Regression tests for assemble.py graceful-degradation fixes (bugs 6 & 7)."""
+
+import shutil
 import sys
 import wave
 from pathlib import Path
 from subprocess import CompletedProcess
 
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "video-assemble" / "scripts"))
 
 import narration_audio  # noqa: E402
 from audio_mix import _seg_place_window  # noqa: E402
@@ -91,9 +93,11 @@ def test_missing_wav_skip_sets_zero_width_window(monkeypatch, tmp_path):
     assert not out.exists()
 
 
-def test_bad_wav_format_skip_sets_zero_width_window(monkeypatch, tmp_path):
-    """Bug 7: a non-mono/non-16-bit WAV skip is dropped from subtitles/ducking."""
-    # Stereo wav -> fails the mono/16-bit check.
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not available")
+def test_noncanonical_wav_is_resampled_and_placed(monkeypatch, tmp_path):
+    """A stereo WAV is normalized at the external ffmpeg boundary and then placed.
+
+    Unlike its siblings this drives the real resample, so it needs a real ffmpeg."""
     wav = _write_wav(tmp_path / "stereo.wav", sample_rate=44100, duration=0.8, channels=2)
 
     segment = {
@@ -106,16 +110,14 @@ def test_bad_wav_format_skip_sets_zero_width_window(monkeypatch, tmp_path):
     }
 
     out = tmp_path / "out.wav"
-    import pytest
-    with pytest.raises(RuntimeError, match="全部 1 段解说均被跳过"):
-        _build_timed_narration([segment], out, 4.0, tmp_path)
+    _build_timed_narration([segment], out, 4.0, tmp_path)
 
     assert segment["actual_place_start"] == segment["start"]
-    assert segment["actual_place_end"] == segment["start"]
-    assert _subtitle_entries([segment]) == []
+    assert segment["actual_place_end"] == pytest.approx(1.8, abs=0.02)
+    assert _subtitle_entries([segment])
     s, e = _seg_place_window(segment)
-    assert e - s < 0.1
-    assert not out.exists()
+    assert e - s == pytest.approx(0.8, abs=0.02)
+    assert out.exists()
 
 
 def test_all_skipped_logs_loud_warning(monkeypatch, tmp_path):

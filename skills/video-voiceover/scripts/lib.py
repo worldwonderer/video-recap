@@ -2,6 +2,7 @@
 Merged from the shared core; reads the same env vars as the rest of the bundle."""
 import json
 import hashlib
+import math
 import os
 import re
 import subprocess
@@ -13,8 +14,6 @@ from email.utils import parsedate_to_datetime
 
 
 # ── 配置 ──────────────────────────────────────────────────────────────
-_EXISTING_CONFIG_REF = globals().get("CONFIG")
-
 DEFAULT_MIMO_API_URL = "https://api.xiaomimimo.com/v1"
 DEFAULT_MIMO_TOKEN_PLAN_CLUSTER = "cn"
 MIMO_TOKEN_PLAN_API_URLS = {
@@ -22,7 +21,6 @@ MIMO_TOKEN_PLAN_API_URLS = {
     "sgp": "https://token-plan-sgp.xiaomimimo.com/v1",
     "ams": "https://token-plan-ams.xiaomimimo.com/v1",
 }
-DEFAULT_MIMO_MODEL = "mimo-v2.5"          # VLM / chat (vision understanding)
 DEFAULT_MIMO_ASR_MODEL = "mimo-v2.5-asr"  # speech-to-text
 DEFAULT_MIMO_TTS_MODEL = "mimo-v2.5-tts"  # text-to-speech
 DEFAULT_FISH_TTS_API_URL = "https://api.fish.audio/v1/tts"
@@ -32,7 +30,7 @@ DEFAULT_FISH_TTS_REFERENCE_ID = "5653cea4ac83480aaf2bf45406556185"
 
 def normalize_api_url(raw_url):
     """Normalize a MiMo (OpenAI-compatible) base URL or chat/completions endpoint."""
-    url = (raw_url or DEFAULT_MIMO_API_URL).rstrip("/")
+    url = raw_url.rstrip("/")
     if url.endswith("/chat/completions"):
         return url
     return f"{url}/chat/completions"
@@ -40,76 +38,80 @@ def normalize_api_url(raw_url):
 
 def is_mimo_token_plan_key(api_key):
     """Return True for Xiaomi MiMo Token Plan keys, which use token-plan base URLs."""
-    return str(api_key or "").strip().startswith("tp-")
+    return api_key.startswith("tp-")
 
 
-def default_mimo_api_url(api_key="", cluster=None):
+def default_mimo_api_url(is_token_plan):
     """Pick the correct MiMo base URL for pay-as-you-go vs Token Plan keys.
 
     MiMo uses independent credentials for pay-as-you-go (`sk-*`) and Token Plan
     (`tp-*`). Token Plan keys must be sent to the Token Plan cluster base URL,
     not the pay-as-you-go `api.xiaomimimo.com` endpoint.
+
+    The caller classifies its own key with `is_mimo_token_plan_key` and passes only
+    that bit: a credential never reaches a function whose return value is logged.
     """
-    if is_mimo_token_plan_key(api_key):
-        cluster_name = (cluster or os.environ.get("MIMO_TOKEN_PLAN_CLUSTER") or DEFAULT_MIMO_TOKEN_PLAN_CLUSTER)
-        cluster_name = str(cluster_name).strip().lower()
-        return MIMO_TOKEN_PLAN_API_URLS.get(cluster_name, MIMO_TOKEN_PLAN_API_URLS[DEFAULT_MIMO_TOKEN_PLAN_CLUSTER])
-    return DEFAULT_MIMO_API_URL
+    if not is_token_plan:
+        return DEFAULT_MIMO_API_URL
+    cluster = os.environ.get("MIMO_TOKEN_PLAN_CLUSTER", DEFAULT_MIMO_TOKEN_PLAN_CLUSTER).strip().lower()
+    if cluster not in MIMO_TOKEN_PLAN_API_URLS:
+        raise ValueError(
+            f"MIMO_TOKEN_PLAN_CLUSTER must be one of {sorted(MIMO_TOKEN_PLAN_API_URLS)}, got {cluster!r}"
+        )
+    return MIMO_TOKEN_PLAN_API_URLS[cluster]
+
+
+def _env_number(name, default, cast, minimum):
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = cast(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a {cast.__name__}, got {raw!r}") from exc
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {raw!r}")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {raw!r}")
+    return value
 
 
 def env_int(name, default, *, minimum=None):
-    """Read an integer env var; ignore malformed values instead of crashing import."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
-
-
-def env_bool(name, default=False):
-    """Read common boolean env var forms."""
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+    """Read an integer env var, rejecting malformed or below-minimum values."""
+    return _env_number(name, default, int, minimum)
 
 
 def env_float(name, default, *, minimum=None):
-    """Read a float env var; ignore malformed values instead of crashing import."""
+    """Read a float env var, rejecting malformed or below-minimum values."""
+    return _env_number(name, default, float, minimum)
+
+
+def env_bool(name, default=False):
+    """Read common boolean env var forms (1/true/yes/y/on, 0/false/no/n/off)."""
     raw = os.environ.get(name)
     if raw is None or raw == "":
         return default
-    try:
-        value = float(raw)
-    except (TypeError, ValueError):
-        return default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
+    text = raw.strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean (1/true/yes/on or 0/false/no/off), got {raw!r}")
 
 
-# Single MiMo credential powers ASR + VLM + TTS. Per-capability overrides
-# (MIMO_VIDEO_API_KEY / MIMO_TTS_API_KEY / MIMO_ASR_API_KEY and their *_API_URL forms)
-# are optional and fall back to MIMO_API_KEY / MIMO_API_URL. Token-Plan keys (tp-*) auto-
-# route to the Token-Plan cluster base URL; pay-as-you-go keys use api.xiaomimimo.com.
+# Single MiMo credential powers ASR + TTS. The TTS override (MIMO_TTS_API_KEY / MIMO_TTS_API_URL)
+# is optional and falls back to MIMO_API_KEY / MIMO_API_URL. Token-Plan keys (tp-*) auto-route to
+# the Token-Plan cluster base URL; pay-as-you-go keys use api.xiaomimimo.com.
 _mimo_api_key = os.environ.get("MIMO_API_KEY", "")
 _mimo_tts_api_key = os.environ.get("MIMO_TTS_API_KEY", "") or _mimo_api_key
-_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(_mimo_api_key)
+_raw_api_url = os.environ.get("MIMO_API_URL") or default_mimo_api_url(is_mimo_token_plan_key(_mimo_api_key))
 _raw_mimo_tts_api_url = (
     os.environ.get("MIMO_TTS_API_URL")
     or os.environ.get("MIMO_API_URL")
-    or default_mimo_api_url(_mimo_tts_api_key)
+    or default_mimo_api_url(is_mimo_token_plan_key(_mimo_tts_api_key))
 )
 
 CONFIG = {
-    "api_url": normalize_api_url(_raw_api_url),
-    "api_key": _mimo_api_key,
-    "api_key_source": "MIMO_API_KEY",
     "mimo_api_url": normalize_api_url(_raw_api_url),
     "mimo_api_key": _mimo_api_key,
     "mimo_tts_api_url": normalize_api_url(_raw_mimo_tts_api_url),
@@ -145,19 +147,15 @@ CONFIG = {
     "tts_segment_target_rms_dbfs": env_float("TTS_SEGMENT_TARGET_RMS_DBFS", -20.0),
     "tts_segment_peak_limit": env_float("TTS_SEGMENT_PEAK_LIMIT", 0.98, minimum=0.1),
 }
-if isinstance(_EXISTING_CONFIG_REF, dict):
-    _EXISTING_CONFIG_REF.clear()
-    _EXISTING_CONFIG_REF.update(CONFIG)
-    CONFIG = _EXISTING_CONFIG_REF
 
-def narration_tempo_budget(tts_rate_offset=0.0, *, config=None):
+
+def narration_tempo_budget(tts_rate_offset=0.0):
     """Return the canonical tempo budget shared by voiceover and assemble."""
-    cfg = config or CONFIG
-    global_speed = max(0.01, float(cfg.get("narration_speed", 1.0) or 1.0))
-    rate_factor = max(0.01, 1.0 + float(tts_rate_offset or 0.0))
-    cumulative_max = max(1.0, float(cfg.get("narration_cumulative_tempo_max", 1.35) or 1.35))
-    hard_max = max(cumulative_max, float(cfg.get("narration_cumulative_tempo_hard_max", 1.40) or 1.40))
-    legacy_segment_cap = max(1.0, float(cfg.get("tts_segment_tempo_max", 1.20) or 1.20))
+    global_speed = CONFIG["narration_speed"]
+    rate_factor = 1.0 + tts_rate_offset
+    cumulative_max = CONFIG["narration_cumulative_tempo_max"]
+    hard_max = max(cumulative_max, CONFIG["narration_cumulative_tempo_hard_max"])
+    legacy_segment_cap = CONFIG["tts_segment_tempo_max"]
     segment_tempo_max = max(1.0, min(legacy_segment_cap, cumulative_max / (global_speed * rate_factor)))
     return {
         "global_narration_speed": global_speed,
@@ -168,43 +166,35 @@ def narration_tempo_budget(tts_rate_offset=0.0, *, config=None):
         "max_raw_duration_factor": global_speed * segment_tempo_max,
     }
 
+
 def log(msg):
     print(f"[video-recap] {msg}", flush=True)
 
+
 def run_cmd(cmd, **kwargs):
-    """运行命令，返回 CompletedProcess"""
-    if isinstance(cmd, list):
-        display_parts = []
-        for part in cmd:
-            text = str(part)
-            display_parts.append(text if len(text) <= 240 else text[:237] + "...")
-        display = " ".join(display_parts)
-    else:
-        display = str(cmd)
-        if len(display) > 2000:
-            display = display[:1997] + "..."
+    """运行命令列表，返回 CompletedProcess"""
+    display = " ".join(
+        str(part) if len(str(part)) <= 240 else str(part)[:237] + "..." for part in cmd
+    )
     log(f"运行: {display}")
     return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
 
+
 def get_video_duration(video_path):
-    """获取视频时长（秒）"""
-    cmd = ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+    """获取媒体时长（秒）"""
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
            "-of", "csv=p=0", str(video_path)]
     result = run_cmd(cmd)
     if result.returncode != 0:
-        return 0.0
-    try:
-        return float(result.stdout.strip())
-    except (TypeError, ValueError):
-        return 0.0
+        raise RuntimeError(f"ffprobe 无法读取时长: {video_path}: {result.stderr.strip()}")
+    return float(result.stdout.strip())
 
-def stable_json_dumps(value):
-    """Serialize values deterministically for non-secret cache fingerprints."""
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
 
 def stable_hash(value):
-    """Return an md5 digest for deterministic JSON-serializable values."""
-    return hashlib.md5(stable_json_dumps(value).encode("utf-8")).hexdigest()
+    """Return an md5 digest of a deterministic JSON serialization (non-secret cache fingerprints)."""
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.md5(encoded.encode("utf-8")).hexdigest()
+
 
 _FILE_FINGERPRINT_MEMO = {}
 
@@ -239,6 +229,8 @@ def file_fingerprint(path, chunk_size=1024 * 1024):
     digest = h.hexdigest()
     _FILE_FINGERPRINT_MEMO[key] = digest
     return digest
+
+
 def _retry_after_seconds(value, fallback):
     """Parse Retry-After seconds or HTTP-date; return fallback on malformed input."""
     if not value:
@@ -265,33 +257,22 @@ _ERROR_KEY_RE = re.compile(r"\b(?:tp|sk)-[A-Za-z0-9_-]{8,}\b")
 
 def _sanitize_api_error(value, limit=500, *, extra_secrets=()):
     """Bound transport diagnostics without echoing request media or credentials."""
-    text = _ERROR_DATA_URL_RE.sub("<redacted-data-url>", str(value or ""))
+    text = _ERROR_DATA_URL_RE.sub("<redacted-data-url>", str(value))
     text = _ERROR_KEY_RE.sub("<redacted-key>", text)
     for secret in extra_secrets:
         if secret:
             text = text.replace(str(secret), "<redacted-key>")
     return text[:limit]
 
-def _api_headers(api_provider=None, api_url=None, api_key=None):
-    """Build MiMo auth headers (OpenAI-compatible chat/completions with an api-key header)."""
-    del api_provider, api_url  # MiMo is the only provider; signature kept for call sites
-    key = CONFIG.get("api_key", "") if api_key is None else api_key
-    return {
-        "Content-Type": "application/json",
-        "User-Agent": "video-recap/1.0",
-        "api-key": key,
-    }
 
-def _prepare_api_payload(payload, api_provider=None, api_url=None):
+def _prepare_api_payload(payload):
     """Normalize payload fields for MiMo's OpenAI-compatible chat/completions API."""
-    del api_provider, api_url
     normalized = dict(payload)
     if "max_tokens" in normalized and "max_completion_tokens" not in normalized:
         normalized["max_completion_tokens"] = normalized.pop("max_tokens")
-    model = str(normalized.get("model") or "")
     if (
-        CONFIG.get("mimo_disable_thinking", True)
-        and not model.endswith(("-tts", "-asr"))
+        CONFIG["mimo_disable_thinking"]
+        and not normalized["model"].endswith(("-tts", "-asr"))
         and "thinking" not in normalized
     ):
         # MiMo V2.5 may spend small max_completion_tokens budgets on reasoning_content.
@@ -299,57 +280,48 @@ def _prepare_api_payload(payload, api_provider=None, api_url=None):
         normalized["thinking"] = {"type": "disabled"}
     return normalized
 
-def _mimo_endpoint(kind):
-    """Return per-capability MiMo endpoint settings (video understanding / TTS / ASR)."""
-    by_kind = {
-        "video": ("mimo_video_api_url", "mimo_video_api_key", "mimo_video_api_key_source"),
-        "tts": ("mimo_tts_api_url", "mimo_tts_api_key", "mimo_tts_api_key_source"),
-        "asr": ("mimo_asr_api_url", "mimo_asr_api_key", "mimo_asr_api_key_source"),
-    }
-    if kind not in by_kind:
-        raise ValueError(f"Unsupported MiMo endpoint kind: {kind}")
-    url_key, key_key, src_key = by_kind[kind]
-    return {
-        "api_url": CONFIG.get(url_key) or CONFIG.get("mimo_api_url"),
-        "api_key": CONFIG.get(key_key) or CONFIG.get("mimo_api_key"),
-        "api_key_source": CONFIG.get(src_key, "MIMO_API_KEY"),
-    }
 
-def _call_mimo_endpoint(kind, payload, max_retries=10):
-    settings = _mimo_endpoint(kind)
+def mimo_tts_api_call(payload):
+    """Call the MiMo TTS endpoint."""
     return api_call(
         payload,
-        max_retries=max_retries,
-        api_provider="mimo",
-        api_url=settings["api_url"],
-        api_key=settings["api_key"],
-        api_key_source=settings["api_key_source"],
+        max_retries=10,
+        api_url=CONFIG["mimo_tts_api_url"],
+        api_key=CONFIG["mimo_tts_api_key"],
+        api_key_source=CONFIG["mimo_tts_api_key_source"],
     )
 
-def mimo_tts_api_call(payload, max_retries=10):
-    """Call the MiMo TTS endpoint."""
-    return _call_mimo_endpoint("tts", payload, max_retries=max_retries)
 
-def mimo_asr_api_call(payload, max_retries=10):
+def mimo_asr_api_call(payload):
     """Call the MiMo speech-recognition (ASR) endpoint."""
-    return _call_mimo_endpoint("asr", payload, max_retries=max_retries)
+    return api_call(
+        payload,
+        max_retries=10,
+        api_url=CONFIG["mimo_api_url"],
+        api_key=CONFIG["mimo_api_key"],
+        api_key_source="MIMO_API_KEY",
+    )
 
-def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key=None, api_key_source=None):
+
+def api_call(payload, *, api_url, api_key, api_key_source, max_retries=8):
     """调用 OpenAI-compatible API，带重试。
 
     集群的 429 限流是常态而非错误，所以重试更耐心（更多次数 + 退避封顶 60s + 遵从 Retry-After），
     避免一次瞬时限流就中止整个阶段。配额窗口常以分钟计，所以 429 在没有 Retry-After 时也至少等 10s。
     """
-    endpoint = normalize_api_url(api_url if api_url is not None else CONFIG["api_url"])
-    headers = _api_headers(api_provider=api_provider, api_url=endpoint, api_key=api_key)
-    data = json.dumps(_prepare_api_payload(payload, api_provider=api_provider, api_url=endpoint)).encode("utf-8")
+    endpoint = normalize_api_url(api_url)
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "video-recap/1.0",
+        "api-key": api_key,
+    }
+    data = json.dumps(_prepare_api_payload(payload)).encode("utf-8")
 
     for attempt in range(max_retries):
         try:
             req = urllib.request.Request(endpoint, data=data, headers=headers)
             with urllib.request.urlopen(req, timeout=300) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                return result
+                return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = _sanitize_api_error(e.read().decode("utf-8", errors="replace"))
             wait = min(2 ** attempt, 60)
@@ -358,8 +330,7 @@ def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key
                 wait = _retry_after_seconds(retry_after, max(wait, 10))
                 log(f"API 速率限制 (尝试 {attempt+1}/{max_retries}), 等待 {wait}s")
             elif e.code == 401:
-                key_name = api_key_source or CONFIG.get("api_key_source", "MIMO_API_KEY")
-                raise RuntimeError(f"API 认证失败 (401)。请检查 {key_name} 和 API URL 是否匹配。")
+                raise RuntimeError(f"API 认证失败 (401)。请检查 {api_key_source} 和 API URL 是否匹配。")
             elif e.code == 403:
                 hint = "API 访问被拒绝 (403)。"
                 if "1010" in body or "cloudflare" in body.lower():
@@ -382,8 +353,6 @@ def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key
             else:
                 raise RuntimeError(f"API 调用失败 {max_retries} 次: HTTP {e.code} — {body}")
         except Exception as e:  # noqa: BLE001 - transport/decode faults are all retryable here
-            # (Deliberately broad, but no longer written as `(URLError, Exception)`, which
-            # read as a tuple while `Exception` already subsumed the first member.)
             wait = min(2 ** attempt, 60)
             safe_error = _sanitize_api_error(e)
             log(f"API 调用失败 (尝试 {attempt+1}/{max_retries}): {safe_error}")
@@ -392,13 +361,11 @@ def api_call(payload, max_retries=8, *, api_provider=None, api_url=None, api_key
                 time.sleep(wait)
             else:
                 raise RuntimeError(f"API 调用失败 {max_retries} 次: {safe_error}")
-    # Unreachable for max_retries >= 1; guards against a silent `None` return (and the
-    # TypeError it would cause at the caller's resp["choices"]) if a caller passes 0.
-    raise ValueError(f"max_retries must be >= 1, got {max_retries}")
+
 
 def _text_char_count(text):
     """计算文本的有效字数（去除标点和空白，这些不占 TTS 朗读时间）。"""
-    return len(re.sub(r'[，。！？、；：…“”‘’《》〈〉\s"\'「」『』（）()【】\[\]—～·,.!?;:\\-]', '', text or ""))
+    return len(re.sub(r'[，。！？、；：…“”‘’《》〈〉\s"\'「」『』（）()【】\[\]—～·,.!?;:\\-]', '', text))
 
 
 def _truncate_at_sentence(text, max_chars):

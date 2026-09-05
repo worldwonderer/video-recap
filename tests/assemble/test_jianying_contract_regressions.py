@@ -256,6 +256,38 @@ def test_v2_timeline_contract_rejects_malformed_required_structure(mutate, messa
         build_draft(timeline, new_id=_counter_ids(), probe=_fake_probe)
 
 
+@pytest.mark.parametrize(
+    ("resource_config", "message"),
+    [
+        ("resource.json", "resource_config: must be an object"),
+        ({"mainConfig": {}}, "main_config: must be an object"),
+        ({"main_config": "{}"}, "main_config: must be an object"),
+        ({"main_config": {}, "resources": ["asset.zip"]}, "resources.*source_path objects"),
+    ],
+)
+def test_resource_config_requires_canonical_object_contract(resource_config, message):
+    timeline = _video_timeline()
+    timeline["tracks"].append({
+        "kind": "sticker",
+        "segments": [{
+            "timeline_start": 0.0,
+            "timeline_end": 1.0,
+            "resource_config": resource_config,
+        }],
+    })
+
+    with pytest.raises(ValueError, match=message):
+        build_draft(timeline, new_id=_counter_ids(), probe=_fake_probe)
+
+
+def test_named_resource_package_uses_same_canonical_object_contract():
+    timeline = _video_timeline()
+    timeline["resource_packages"] = {"legacy": {"mainConfig": {}}}
+
+    with pytest.raises(ValueError, match="resource_packages.legacy.main_config"):
+        build_draft(timeline, new_id=_counter_ids(), probe=_fake_probe)
+
+
 def test_missing_relative_media_is_reported_during_portable_export(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     timeline = _video_timeline("definitely-missing.mp4")

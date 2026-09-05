@@ -15,6 +15,7 @@ import cut_contract
 import cut_render
 import media_geometry
 import sentence_boundaries
+from lib import env_float
 from cut import (
     build_edited_source_video,
     lint_mapped_narration,
@@ -29,12 +30,37 @@ from cut import (
 _HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
 
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf"])
+def test_env_float_rejects_nonfinite_values(monkeypatch, raw):
+    monkeypatch.setenv("NONFINITE_FLOAT", raw)
+
+    with pytest.raises(ValueError, match="NONFINITE_FLOAT.*finite"):
+        env_float("NONFINITE_FLOAT", 1.0, min_val=0.0)
+
+
+def _geometry(width, height, fps):
+    """A probed geometry as ffprobe reports a square-pixel, unrotated stream."""
+    return media_geometry._geometry_from_stream(
+        {"width": width, "height": height, "r_frame_rate": f"{fps}/1"}
+    )
+
+
+def _mock_media_probes(monkeypatch):
+    """main() probes the (fake) source video for its canvas and shot changes."""
+    monkeypatch.setattr(
+        media_geometry, "_probe_video_geometry", lambda _path: _geometry(1280, 720, 30.0)
+    )
+    monkeypatch.setattr(
+        sentence_boundaries, "_detect_shot_changes", lambda *_args, **_kwargs: []
+    )
+
+
 def test_lint_mapped_narration_flags_dropped_and_sparse():
     """Post-map re-lint must surface beats dropped by the mapper and a sparse cut output
     (the otherwise-invisible half of cut-mode desync)."""
     mapped = [
-        {"start": 5.0, "end": 8.0, "narration": "一。"},
-        {"start": 50.0, "end": 53.0, "narration": "二。"},
+        {"start": 5.0, "end": 8.0, "narration": "一。", "clamped": False},
+        {"start": 50.0, "end": 53.0, "narration": "二。", "clamped": False},
     ]
     report = lint_mapped_narration(mapped, original_count=8, output_duration=60.0)
     codes = {w["code"] for w in report["warnings"]}
@@ -45,7 +71,7 @@ def test_lint_mapped_narration_flags_dropped_and_sparse():
     assert report["drop_ratio"] == 0.75
 
     dense = [
-        {"start": float(i * 6), "end": float(i * 6 + 4), "narration": "一句。"}
+        {"start": float(i * 6), "end": float(i * 6 + 4), "narration": "一句。", "clamped": False}
         for i in range(10)
     ]
     healthy = lint_mapped_narration(dense, original_count=10, output_duration=60.0)
@@ -55,8 +81,8 @@ def test_lint_mapped_narration_flags_dropped_and_sparse():
 def test_lint_mapped_narration_blocking_and_clamped_flags():
     """Heavy drop/sparse output and any clipped narration sentence are BLOCKING."""
     sparse = [
-        {"start": 5.0, "end": 8.0, "narration": "一。"},
-        {"start": 50.0, "end": 53.0, "narration": "二。"},
+        {"start": 5.0, "end": 8.0, "narration": "一。", "clamped": False},
+        {"start": 50.0, "end": 53.0, "narration": "二。", "clamped": False},
     ]
     assert (
         lint_mapped_narration(sparse, original_count=8, output_duration=60.0)[
@@ -66,7 +92,7 @@ def test_lint_mapped_narration_blocking_and_clamped_flags():
     )
 
     dense = [
-        {"start": float(i * 6), "end": float(i * 6 + 4), "narration": "一句。"}
+        {"start": float(i * 6), "end": float(i * 6 + 4), "narration": "一句。", "clamped": False}
         for i in range(10)
     ]
     assert (
@@ -119,6 +145,7 @@ def test_cut_main_normalize_only_writes_validated_plan_without_render(
     monkeypatch, tmp_path
 ):
     """Step 4: --normalize-only writes clip_plan_validated.json and skips the render/map."""
+    _mock_media_probes(monkeypatch)
     import sys
     import json as _json
     import cut
@@ -160,6 +187,7 @@ def test_cut_main_normalize_only_writes_validated_plan_without_render(
 def test_cut_main_keeps_sentence_gate_when_line_snapping_is_disabled(
     monkeypatch, tmp_path, multi_source
 ):
+    _mock_media_probes(monkeypatch)
     import cut_cli
 
     video = tmp_path / "v.mp4"
@@ -223,6 +251,7 @@ def test_cut_main_keeps_sentence_gate_when_line_snapping_is_disabled(
 def test_cut_main_blocks_on_heavy_drop_unless_allow_sparse(monkeypatch, tmp_path):
     """Step 4: a cut whose narration mostly falls outside the kept clips FAILS the preflight
     (before TTS), unless --allow-sparse-cut is given."""
+    _mock_media_probes(monkeypatch)
     import sys
     import json as _json
     import pytest as _pytest
@@ -397,6 +426,7 @@ def test_clip_padding_env_reaches_the_only_skill_that_implements_it(monkeypatch,
     """The CONFIG→normalizer half. CLIP_PADDING was declared in five skills' CONFIGs and
     reported as an active knob via clip_padding_source, but video-cut — the only skill that
     implements padding — read the CLI flag alone."""
+    _mock_media_probes(monkeypatch)
     import cut_cli
 
     work = tmp_path / "w"
@@ -499,6 +529,9 @@ def test_narration_mapping_uses_explicit_source_clip_id_for_repeated_ranges():
 
 
 def test_build_edited_source_video_uses_ffmpeg_concat(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        media_geometry, "_probe_video_geometry", lambda _path: _geometry(1280, 720, 30.0)
+    )
     video = tmp_path / "video.mp4"
     video.write_bytes(b"fake")
     work_dir = tmp_path / "work"
@@ -546,6 +579,7 @@ def test_cut_source_fingerprint_detects_middle_only_changes(tmp_path):
 def test_cut_main_does_not_reuse_edited_source_when_normalized_plan_changes(
     monkeypatch, tmp_path
 ):
+    _mock_media_probes(monkeypatch)
     import json
     import sys
     import cut
@@ -625,7 +659,20 @@ def test_edited_source_cache_fingerprint_includes_render_affecting_config(
     assert cut.should_reuse_edited_source(edited, plan, video) is False
 
 
+@pytest.mark.parametrize("metadata", ["not json", "{}", "[]"])
+def test_edited_source_cache_treats_corrupt_metadata_as_a_miss(tmp_path, metadata):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    edited = tmp_path / "edited_source.mp4"
+    edited.write_bytes(b"edited")
+    Path(f"{edited}.meta.json").write_text(metadata, encoding="utf-8")
+    plan = cut.normalize_clip_plan([{"start": 0.0, "end": 1.0}], video_duration=2.0)
+
+    assert cut.should_reuse_edited_source(edited, plan, video) is False
+
+
 def test_cut_main_reuses_edited_source_when_fingerprint_matches(monkeypatch, tmp_path):
+    _mock_media_probes(monkeypatch)
     import json
     import sys
     import cut
@@ -654,6 +701,7 @@ def test_cut_main_reuses_edited_source_when_fingerprint_matches(monkeypatch, tmp
 
 
 def test_cut_main_rebuilds_when_source_video_bytes_change(monkeypatch, tmp_path):
+    _mock_media_probes(monkeypatch)
     import json
     import sys
     import cut
@@ -694,6 +742,7 @@ def test_cut_main_rebuilds_when_source_video_bytes_change(monkeypatch, tmp_path)
 def test_cut_main_rebuilds_when_cached_edited_source_bytes_change(
     monkeypatch, tmp_path
 ):
+    _mock_media_probes(monkeypatch)
     import json
     import sys
     import cut
@@ -806,11 +855,7 @@ def test_snap_empty_silence_returns_plan_unchanged():
     snapped_empty = snap_clip_ends_to_lines(
         plan, [], video_duration=100.0, max_extend=2.0
     )
-    snapped_none = snap_clip_ends_to_lines(
-        plan, None, video_duration=100.0, max_extend=2.0
-    )
     assert snapped_empty is plan
-    assert snapped_none is plan
 
 
 def test_snap_recomputes_output_timeline_for_all_clips():
@@ -835,16 +880,6 @@ def test_snap_recomputes_output_timeline_for_all_clips():
     assert c1["output_start"] == 12.0
     assert c1["output_end"] == 22.0
     assert snapped["total_duration"] == 22.0
-
-
-def test_snap_skips_malformed_silence_rows():
-    """A stale/hand-edited silence row (missing start/end, or not a dict) is skipped, not fatal."""
-    silence = [{"foo": 1}, "bad", {"start": 12.0, "end": 13.0, "duration": 1.0}]
-    plan = _make_plan([(0.0, 10.0)])
-    snapped = snap_clip_ends_to_lines(
-        plan, silence, video_duration=100.0, max_extend=5.0
-    )
-    assert snapped["clips"][0]["source_end"] == 12.0  # the well-formed row still snaps
 
 
 def test_sentence_anchor_pause_window_snaps_both_clip_edges(tmp_path):
@@ -927,7 +962,7 @@ def test_scene_cut_snap_moves_start_forward_past_early_change(monkeypatch):
     )
     plan = _make_plan([(10.0, 30.0)])
     snapped = snap_clips_off_shot_changes(
-        plan, "v.mp4", video_duration=100.0, margin=0.5, threshold=0.4
+        plan, "v.mp4", margin=0.5, threshold=0.4
     )
     c = snapped["clips"][0]
     assert c["source_start"] == 10.3 and c["source_end"] == 30.0
@@ -942,7 +977,7 @@ def test_scene_cut_snap_pulls_end_back_before_late_change(monkeypatch):
     )
     plan = _make_plan([(10.0, 30.0)])
     snapped = snap_clips_off_shot_changes(
-        plan, "v.mp4", video_duration=100.0, margin=0.5, threshold=0.4
+        plan, "v.mp4", margin=0.5, threshold=0.4
     )
     c = snapped["clips"][0]
     assert c["source_start"] == 10.0 and c["source_end"] == 29.7
@@ -955,7 +990,7 @@ def test_scene_cut_snap_leaves_clean_boundaries_untouched(monkeypatch):
     )
     plan = _make_plan([(10.0, 30.0)])
     snapped = snap_clips_off_shot_changes(
-        plan, "v.mp4", video_duration=100.0, margin=0.5, threshold=0.4
+        plan, "v.mp4", margin=0.5, threshold=0.4
     )
     c = snapped["clips"][0]
     assert c["source_start"] == 10.0 and c["source_end"] == 30.0
@@ -968,7 +1003,7 @@ def test_scene_cut_snap_skips_when_snap_would_collapse_clip(monkeypatch):
     )
     plan = _make_plan([(10.0, 10.6)])  # 0.6s clip, change at 10.4 inside both windows
     snapped = snap_clips_off_shot_changes(
-        plan, "v.mp4", video_duration=100.0, margin=0.5, threshold=0.4
+        plan, "v.mp4", margin=0.5, threshold=0.4
     )
     c = snapped["clips"][0]
     assert (
@@ -984,7 +1019,7 @@ def test_scene_cut_snap_recomputes_output_across_multiple_clips(monkeypatch):
     )
     plan = _make_plan([(10.0, 20.0), (40.0, 50.0)])
     snapped = snap_clips_off_shot_changes(
-        plan, "v.mp4", video_duration=100.0, margin=0.5, threshold=0.4
+        plan, "v.mp4", margin=0.5, threshold=0.4
     )
     a, b = snapped["clips"]
     assert (
@@ -1070,6 +1105,9 @@ def test_normalize_multi_source_clip_plan_maps_sources_and_validates_per_source_
 def test_build_edited_source_video_multi_source_uses_multiple_inputs_and_cache_meta(
     monkeypatch, tmp_path
 ):
+    monkeypatch.setattr(
+        media_geometry, "_probe_video_geometry", lambda _path: _geometry(1280, 720, 30.0)
+    )
     a = tmp_path / "a.mp4"
     b = tmp_path / "b.mp4"
     a.write_bytes(b"aaa")
@@ -1113,8 +1151,8 @@ def test_build_edited_source_video_multi_source_uses_multiple_inputs_and_cache_m
     assert "[0:v]trim=start=0.000:end=1.000" in joined
     assert "[1:v]trim=start=2.000:end=3.000" in joined
     assert "[0:v]trim=start=4.000:end=5.000" in joined
-    # Heterogeneous sources are normalized to one canvas before concat (probe is mocked
-    # empty -> default 1280x720), and each clip gets an audio segment (silent here).
+    # Heterogeneous sources are normalized to one canvas before concat (probed canvas is
+    # mocked to 1280x720), and each clip gets an audio segment (silent here).
     assert (
         "scale=1280:720" in joined
         and "setsar=1" in joined
@@ -1289,6 +1327,8 @@ def test_snap_multi_source_clips_line_snaps_each_clip_against_its_own_source(tmp
         line_max_extend=2.0,
         scene_margin=0.5,
         scene_threshold=0.4,
+        start_max_prepend=1.8,
+        start_max_trim=0.35,
         do_scene_snap=False,
     )
 
@@ -1349,6 +1389,8 @@ def test_snap_multi_source_clips_routes_shot_detection_to_each_clips_source(
         line_max_extend=2.0,
         scene_margin=0.5,
         scene_threshold=0.4,
+        start_max_prepend=1.8,
+        start_max_trim=0.35,
         do_line_snap=False,
     )
 
@@ -1434,6 +1476,8 @@ def test_snap_multi_source_clips_noops_without_silence_or_flags(tmp_path):
         line_max_extend=2.0,
         scene_margin=0.5,
         scene_threshold=0.4,
+        start_max_prepend=1.8,
+        start_max_trim=0.35,
         do_scene_snap=False,
     )
     assert out["clips"][0]["source_end"] == 4.0
@@ -1565,8 +1609,8 @@ def test_snap_multi_source_clips_start_snaps_each_source_silence(tmp_path):
 
 def test_select_output_geometry_uses_all_used_sources_not_first(monkeypatch):
     probes = {
-        "/low.mp4": (854, 480, 24.0),
-        "/hd.mp4": (1920, 1080, 30.0),
+        "/low.mp4": _geometry(854, 480, 24.0),
+        "/hd.mp4": _geometry(1920, 1080, 30.0),
     }
     monkeypatch.setattr(
         media_geometry, "_probe_video_geometry", lambda p: probes[str(p)]
@@ -1587,9 +1631,9 @@ def test_select_output_geometry_uses_all_used_sources_not_first(monkeypatch):
 
 def test_select_output_geometry_orientation_duration_and_fps_ties(monkeypatch):
     probes = {
-        "/portrait.mp4": (1080, 1920, 24.0),
-        "/landscape.mp4": (1280, 720, 60.0),
-        "/landscape2.mp4": (1920, 1080, 30.0),
+        "/portrait.mp4": _geometry(1080, 1920, 24.0),
+        "/landscape.mp4": _geometry(1280, 720, 60.0),
+        "/landscape2.mp4": _geometry(1920, 1080, 30.0),
     }
     monkeypatch.setattr(
         media_geometry, "_probe_video_geometry", lambda p: probes[str(p)]
@@ -1660,7 +1704,7 @@ def test_select_output_geometry_qc_exposes_rotation_sar_dar_facts(monkeypatch):
                 "display_aspect_ratio": "16:9",
             },
         ),
-        "/landscape.mp4": (1280, 720, 30.0),
+        "/landscape.mp4": _geometry(1280, 720, 30.0),
     }
     monkeypatch.setattr(
         media_geometry, "_probe_video_geometry", lambda p: probes[str(p)]
@@ -1733,11 +1777,8 @@ def test_build_edited_source_video_writes_delivery_qc_and_meta_without_visual_qc
         (work_dir / "cut_delivery_qc.json").read_text(encoding="utf-8")
     )
     validated_delivery = plan["qc"]["delivery_qc"]
-    meta = json.loads(
-        (work_dir / "edited_source.mp4.meta.json").read_text(encoding="utf-8")
-    )
     assert output.exists()
-    assert delivery == validated_delivery == meta["delivery_qc"]
+    assert delivery == validated_delivery
     assert delivery["video_encode_passes"] == 1
     assert delivery["audio_sample_rate"] == {"target": 48000, "probed": 48000}
     assert "trim_concat_filter_requires_reencode" in delivery["reencode_reason"]
@@ -1747,6 +1788,9 @@ def test_build_edited_source_video_writes_delivery_qc_and_meta_without_visual_qc
 
 
 def test_audio_join_fade_is_in_filter_graph(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        media_geometry, "_probe_video_geometry", lambda _path: _geometry(1280, 720, 30.0)
+    )
     video = tmp_path / "video.mp4"
     video.write_bytes(b"fake")
     work_dir = tmp_path / "work"
@@ -1781,6 +1825,9 @@ def test_contiguous_same_source_join_does_not_fade_inside_sentence(
     monkeypatch, tmp_path
 ):
     """A no-gap source continuation is one sentence stream; do not attenuate its join."""
+    monkeypatch.setattr(
+        media_geometry, "_probe_video_geometry", lambda _path: _geometry(1280, 720, 30.0)
+    )
     video = tmp_path / "video.mp4"
     video.write_bytes(b"fake")
     work_dir = tmp_path / "work"
@@ -1859,13 +1906,27 @@ def test_cut_probe_video_geometry_is_rotation_sar_dar_aware(monkeypatch):
     portrait sources and non-square pixels feed the same canvas truth as assemble."""
     outputs = iter(
         [
-            "1920,1080,30000/1001,90,1:1,9:16\n",
-            "720,576,25/1,0,16:15,4:3\n",
+            {
+                "width": 1920,
+                "height": 1080,
+                "r_frame_rate": "30000/1001",
+                "sample_aspect_ratio": "1:1",
+                "display_aspect_ratio": "9:16",
+                "tags": {"rotate": "90"},
+            },
+            {
+                "width": 720,
+                "height": 576,
+                "r_frame_rate": "25/1",
+                "sample_aspect_ratio": "16:15",
+                "display_aspect_ratio": "4:3",
+            },
         ]
     )
 
     def fake_run_cmd(cmd):
-        return CompletedProcess(cmd, 0, stdout=next(outputs), stderr="")
+        payload = json.dumps({"streams": [next(outputs)]})
+        return CompletedProcess(cmd, 0, stdout=payload, stderr="")
 
     monkeypatch.setattr(media_geometry, "run_cmd", fake_run_cmd)
 
