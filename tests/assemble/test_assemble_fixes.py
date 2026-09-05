@@ -1,5 +1,6 @@
 """Regression tests for assemble.py graceful-degradation fixes (bugs 6 & 7)."""
 
+import shutil
 import sys
 import wave
 from pathlib import Path
@@ -92,8 +93,11 @@ def test_missing_wav_skip_sets_zero_width_window(monkeypatch, tmp_path):
     assert not out.exists()
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not available")
 def test_noncanonical_wav_is_resampled_and_placed(monkeypatch, tmp_path):
-    """A stereo WAV is normalized at the external ffmpeg boundary and then placed."""
+    """A stereo WAV is normalized at the external ffmpeg boundary and then placed.
+
+    Unlike its siblings this drives the real resample, so it needs a real ffmpeg."""
     wav = _write_wav(tmp_path / "stereo.wav", sample_rate=44100, duration=0.8, channels=2)
 
     segment = {

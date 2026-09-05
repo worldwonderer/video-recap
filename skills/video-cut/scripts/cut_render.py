@@ -44,7 +44,11 @@ def _clip_audio_edge_fades(clips, idx, fade_ms):
 
 
 def _probe_audio_sample_rate(video_path):
-    """Sample rate of the first audio stream, or None when ffprobe reports none."""
+    """Sample rate of the first audio stream, or None when it cannot be observed.
+
+    Delivery QC is observational and runs even on a plan that was never rendered, so an
+    ffprobe that is absent (OSError) reads the same as one that reports no audio stream.
+    """
     cmd = [
         "ffprobe",
         "-v",
@@ -57,7 +61,10 @@ def _probe_audio_sample_rate(video_path):
         "csv=p=0",
         str(video_path),
     ]
-    result = run_cmd(cmd)
+    try:
+        result = run_cmd(cmd)
+    except OSError:
+        return None
     text = result.stdout.strip()
     if result.returncode != 0 or not text:
         return None
