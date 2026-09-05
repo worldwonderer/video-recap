@@ -12,7 +12,13 @@ All notable changes to this project are documented here.
 
 ## [0.5.0] - 2026-09-05
 
-以「在边界校验一次，之后信任契约」为原则的一次全量瘦身：删除约 2,600 行防御式代码，把校验集中到真正的输入边界，并修复审查过程中发现的三处真实缺陷。行为收紧之处见 `Changed`。
+两条主线：新增 Fish Audio TTS 通道与《锅火》60 秒案例；以及一次以「在边界校验一次，之后信任契约」为原则的全量瘦身——删除约 2,600 行防御式代码，把校验集中到真正的输入边界，并修复审查过程中发现的三处真实缺陷。行为收紧之处见 `Changed`。
+
+### Added
+
+- **TTS 可切换到 Fish Audio。** `--tts-provider fish-audio`（或 `TTS_PROVIDER=fish-audio`）搭配 `FISH_API_KEY` 即可使用；默认走 `s2.1-pro-free` 与内置「娱乐扒妹」解说音色（reference ID `5653cea4ac83480aaf2bf45406556185`），`FISH_TTS_REFERENCE_ID` 可覆盖。MiMo 仍是默认路径，不受影响。该免费模型无 SLA、受 Fair Use Policy 约束，官方公示的免费开放期至 2026-08-31，之后以 Fish Audio 官方政策为准。(#70)
+- **《锅火》60 秒案例。** `examples/guohuo-60s/` 收录一次完整创作的产物：核心 cut、音画锁定、包装探索、看片反馈、局部 conform / 再剪与冻结项复核，并覆盖多集选段、原声与旁白分工、Fish Audio 配音与 TTS 对齐字幕，以及通过恢复源镜头连续性修复不自然接点。仓库不包含原剧音视频二进制。(#70)
+- **面向密集换镜与返修流程的可复用剪辑指引。**(#70)
 
 ### Changed
 
@@ -20,6 +26,7 @@ All notable changes to this project are documented here.
 - **配置与探测失败改为显式报错。** `env_int` / `env_float` / `env_bool` 遇到无法解析的环境变量不再静默回退默认值；`ffprobe` 读不出时长或视频流时抛错，不再退回 `0.0` 或 1280x720 默认画布——错误的画布会静默产出错位的字幕几何。
 - **剪映资源契约收敛为规范 snake_case 对象。** `resources` 条目必须是带 `source_path` 的对象（不再接受裸字符串），`main_config` 必须是对象（不再接受 JSON 字符串或文件路径），不再接受 Jackson 的 `mainConfig` / `resourceId` / `coverImg` 别名，也不再按 `.cube` / `.ttf` 后缀推断 `resource_kind`。外部输入请在调用本 skill 前完成适配。
 - **`MIMO_TOKEN_PLAN_CLUSTER` 取值非法时报错**，不再静默回退到 `cn` 集群。
+- **仓库迁移到 `zenstory-ai` namespace。** 文档、marketplace 与安装指引中的地址改为 `zenstory-ai/video-recap-skills`；按旧地址安装的用户需要重新指向新仓库。
 
 ### Fixed
 
@@ -30,6 +37,7 @@ All notable changes to this project are documented here.
 ### Security
 
 - **凭证不再传入只需要一个判断位的 URL 构造函数。** `default_mimo_api_url` 改为接收 `is_token_plan` 布尔值，由调用方先用 `is_mimo_token_plan_key` 归类；它的返回值会被 `doctor.py` 打印，因此密钥本身不应流入。解析出的 URL 行为不变。
+- **CI workflow 显式声明最小权限。** `skill-validate.yml` 补上 `permissions:` 声明，不再继承仓库默认的宽松 token 权限。(#72)
 
 ## [0.4.0] - 2026-07-27
 
